@@ -12,8 +12,9 @@ services:
     volumes:
       - "./chrome-profile:/home/neko/chrome-profile"
     environment:
-      NEKO_DESKTOP_SCREEN: 1366x768@30
+      NEKO_DESKTOP_SCREEN: 1366x768@24
       NEKO_MEMBER_MULTIUSER_USER_PASSWORD: neko
       NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD: admin
       NEKO_WEBRTC_EPR: 52000-52100
       NEKO_WEBRTC_ICELITE: 1
+      # NEKO_WEBRTC_NAT1TO1: <server-ip>  # WebRTC NAT traversal: set to server's LAN or Tailscale IP

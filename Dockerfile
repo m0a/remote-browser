@@ -23,5 +23,3 @@ RUN mkdir -p /home/neko/chrome-profile && \
 
 # CDP proxy port
 EXPOSE 9223
-
-USER neko
