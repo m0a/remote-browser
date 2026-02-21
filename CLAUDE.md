@@ -141,3 +141,38 @@ tailscale serve --bg <VIEWER_PORT>
 # HTTPS 解除
 tailscale serve off
 ```
+
+## CEF Browser PoC (cef-browser/)
+
+Rust + CEF (mycrl/wew) による次世代リモートブラウザ。
+CEF の Off-Screen Rendering で直接ピクセルバッファを取得し、
+全ダイアログを DOM 化してネイティブダイアログをゼロにすることが目標。
+
+### 現状 (Phase 1)
+
+- CEF OSR → BGRA → JPEG → WebSocket ストリーミング (30 FPS)
+- 既存 PWA ビューア互換プロトコル
+- CDP エンドポイント (`--remote-debugging-port`)
+- マウス/キーボード/タッチ入力中継
+- Xvfb 自動起動
+
+### 起動
+
+```bash
+cd cef-browser
+cargo build
+bash run.sh [URL]        # デフォルト: https://www.google.com
+# CDP_PORT=9222 で CDP が有効
+# PORT=3000 でビューアサーバーが起動
+```
+
+### Phase 2 (TODO)
+
+- wew フォークでダイアログハンドラ追加 (CefDialogHandler, CefJSDialogHandler)
+- ファイルピッカー/Passkey を DOM 化
+- カスタムブラウザ UI (アドレスバー、タブ)
+
+### 依存
+
+- Rust 1.70+, cmake, ninja, clang (libclang)
+- Xvfb (xorg-server-xvfb)
