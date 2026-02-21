@@ -1,0 +1,12 @@
+{
+  "DeveloperToolsAvailability": 1,
+  "AutoFillEnabled": false,
+  "BrowserSignin": 0,
+  "DefaultBrowserSettingEnabled": false,
+  "DefaultNotificationsSetting": 2,
+  "MetricsReportingEnabled": false,
+  "PasswordManagerEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "SyncDisabled": true,
+  "TranslateEnabled": false
+}
