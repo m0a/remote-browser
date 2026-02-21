@@ -8,7 +8,7 @@ name = "cef-browser"
 path = "src/main.rs"
 
 [dependencies]
-wew = { git = "https://github.com/mycrl/wew" }
+wew = { path = "wew" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }

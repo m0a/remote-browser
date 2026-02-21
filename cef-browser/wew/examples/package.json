@@ -1,0 +1,22 @@
+{
+    "name": "windowless_rendering",
+    "version": "1.0.0",
+    "description": "",
+    "type": "module",
+    "main": "build.js",
+    "private": true,
+    "scripts": {
+        "windowless-rendering": "node ./build.js -- --project windowless-rendering",
+        "main-thread": "node ./build.js -- --project main-thread"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/mycrl/wew.git"
+    },
+    "author": "Mr.Panda",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/mycrl/wew/issues"
+    },
+    "homepage": "https://github.com/mycrl/wew#readme"
+}

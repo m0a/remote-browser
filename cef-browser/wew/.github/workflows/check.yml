@@ -1,0 +1,29 @@
+name: publish release
+on:
+    push:
+        branches:
+            - "main"
+jobs:
+    check:
+        runs-on: "${{ matrix.os }}"
+        strategy:
+            matrix:
+                os:
+                    - windows-latest
+                    - macos-latest
+                    - ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/bin/
+                      ~/.cargo/registry/index/
+                      ~/.cargo/registry/cache/
+                      ~/.cargo/git/db/
+                      target/
+                  key: "${{ matrix.os }}-cargo"
+
+            - name: Check
+              run: |
+                  cargo check

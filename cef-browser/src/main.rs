@@ -80,6 +80,34 @@ impl WebViewHandler for FrameHandler {
     fn on_title_change(&self, title: &str) {
         eprintln!("[CEF] Title: {}", title);
     }
+
+    fn on_js_dialog(&self, dialog_type: u32, message_text: &str, default_prompt_text: &str) {
+        let type_name = match dialog_type {
+            0 => "alert",
+            1 => "confirm",
+            2 => "prompt",
+            3 => "beforeunload",
+            _ => "unknown",
+        };
+        eprintln!(
+            "[CEF] JS dialog suppressed: type={}, message={}, default={}",
+            type_name, message_text, default_prompt_text
+        );
+    }
+
+    fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {
+        let mode_name = match mode {
+            0 => "open",
+            1 => "open_multiple",
+            2 => "open_folder",
+            3 => "save",
+            _ => "unknown",
+        };
+        eprintln!(
+            "[CEF] File dialog suppressed: mode={}, title={}, path={}",
+            mode_name, title, default_file_path
+        );
+    }
 }
 
 impl WindowlessRenderWebViewHandler for FrameHandler {

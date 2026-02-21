@@ -1,0 +1,52 @@
+[package]
+name = "wew"
+version = "0.1.0"
+edition = "2024"
+authors = ["mycrl <lepidodendraceae@gmail.com>"]
+description = "Cross-platform WebView rendering library for rust."
+readme = "./README.md"
+homepage = "https://github.com/mycrl/wew"
+repository = "https://github.com/mycrl/wew"
+license = "MIT"
+keywords = ["webview", "cef"]
+categories = ["gui"]
+
+[dependencies]
+bitflags = "2.9.1"
+parking_lot = "0.12"
+url = "2.5.4"
+mime_guess = "2.0.5"
+raw-window-handle = "0.6.2"
+winit = { version = "0.30", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.60.0", features = [
+    "Win32",
+    "Win32_System",
+    "Win32_System_Threading",
+    "Win32_UI",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.1"
+
+[target.'cfg(any(target_os = "linux"))'.dependencies]
+libc = "0.2.174"
+
+[build-dependencies]
+anyhow = "1"
+which = "6.0"
+bindgen = "0.72.0"
+cc = { version = "1.2.27", features = ["parallel"] }
+
+[features]
+default = []
+winit = ["dep:winit"]
+
+[workspace]
+members = ["examples/*"]
+
+[package.metadata.docs.rs]
+all-features = true
