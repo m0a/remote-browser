@@ -1,2 +1,4 @@
 chrome-profile/
+.git/
+*.md
 viewer/viewer-server

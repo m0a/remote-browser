@@ -1,149 +1,143 @@
 # remote-browser
 
-n.eko ベースのリモートブラウザ + CDP (Chrome DevTools Protocol) 対応プロジェクト。
-Linux サーバ (X server なし) 上で Docker コンテナとしてブラウザを動かし、
-Android 端末等から WebRTC で操作、Claude Code (CC) が CDP 経由で自動化を引き継ぐ。
+Chrome headless + CDP screencast ベースのリモートブラウザ。
+シングルバイナリで Chrome の起動から PWA 配信まで一括管理する。
 
 ## 目的・ユースケース
 
 1. CC の agent-browser 等でブラウザ自動化を行う際、認証(ログイン/2FA/CAPTCHA)を人間が引き継ぐ
-2. 人間は Android 端末の Web ブラウザから WebRTC UI にアクセスし、認証操作を行う
+2. 人間はスマホから PWA ビューア (HTTPS) にアクセスし、タッチ操作で認証
 3. 認証完了後、CC が CDP 経由で同じブラウザセッションに接続し自動化を継続する
 
 ## アーキテクチャ
 
 ```
-┌─────────────────────────────────────┐
-│  Docker Container (remote-browser)  │
-│                                     │
-│  ┌───────────┐  ┌────────────────┐  │
-│  │  Xvfb     │  │  openbox (WM)  │  │
-│  └─────┬─────┘  └────────────────┘  │
-│        │                             │
-│  ┌─────┴──────────────────────────┐  │
-│  │  Google Chrome                 │  │
-│  │  --remote-debugging-port=9222  │  │
-│  │  (127.0.0.1:9222 に bind)     │  │
-│  └─────┬──────────────────────────┘  │
-│        │                             │
-│  ┌─────┴──────────────────────────┐  │
-│  │  socat proxy                   │  │
-│  │  0.0.0.0:9223 → 127.0.0.1:9222│  │
-│  └────────────────────────────────┘  │
-│                                     │
-│  ┌────────────────────────────────┐  │
-│  │  neko server (WebRTC + Web UI) │  │
-│  │  0.0.0.0:8080                  │  │
-│  └────────────────────────────────┘  │
-└─────────────────────────────────────┘
+ホスト上で直接実行 (Docker 不要):
 
-ポート:
-  8080/tcp        → WebRTC UI (人間がブラウザ操作)
-  52000-52100/udp → WebRTC メディアストリーム
-  9223/tcp        → CDP (CC が自動化に使用)
+  viewer-server (シングルバイナリ)
+    ├── Chrome --headless=new --remote-debugging-port=0
+    │     CDP ポートは自動割り当て (stderr から検出)
+    └── HTTP/WS サーバー (PORT=0)
+          ポートは自動割り当て (stdout に出力)
+
+  tailscale serve --bg <viewer-port>
+    → https://<hostname>.ts.net/ で HTTPS 公開
+
+スマホ: https://<hostname>.ts.net → PWA (CDP screencast)
+AI:    agent-browser --cdp <cdp-port> (localhost)
 ```
 
-## 技術的な注意点
+## 前提条件
 
-### Chrome の CDP バインド問題
-Chrome は `--remote-debugging-address=0.0.0.0` を指定しても **127.0.0.1 にしかバインドしない**
-(Chromium のセキュリティ仕様)。そのため `socat` で TCP プロキシを経由させる必要がある:
-```
-socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222
-```
+- Google Chrome または Chromium がインストール済み
+- Bun ランタイム (開発時) または ビルド済みバイナリ
+- Tailscale (HTTPS 公開に使用、任意)
 
-### DevTools ポリシー
-デフォルトの n.eko chromium イメージは `DeveloperToolsAvailability: 2` (無効) に設定されている。
-CDP を使うには `policies.json` で `1` (有効) に変更する必要がある。
+## 起動
 
-### user-data-dir
-デバッグモードで Chrome を起動するには、デフォルトとは別の `--user-data-dir` が必要。
-`/home/neko/chrome-profile` を使用する。
-
-## セットアップ手順
-
-### 前提条件
-- Docker + Docker Compose がインストール済み
-- ポート 8080, 9223, 52000-52100/udp が利用可能
-
-### 起動
 ```bash
-cd /home/m0a/repos/remote-browser
-docker compose up -d
+# 開発モード (Bun で直接実行)
+bun run viewer/server.ts
+
+# ビルド済みバイナリ
+./viewer/viewer-server
 ```
 
-### 接続
-- **WebRTC UI (人間操作):** `http://<server-ip>:8080`
-  - User パスワード: `neko`
-  - Admin パスワード: `admin`
-- **CDP (CC 自動化):** `http://localhost:9223`
+起動すると stdout に以下が出力される:
+```
+VIEWER_PORT=<port>
+CDP_PORT=<port>
+```
 
-### CDP 接続確認
+### 環境変数
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `CHROME_BIN` | 自動検出 | Chrome バイナリパス |
+| `CHROME_PROFILE` | `./chrome-profile` | Chrome プロファイルディレクトリ |
+| `CDP_PORT` | (自動) | 指定すると Chrome を起動せず既存の CDP に接続 |
+| `PORT` | `0` (自動) | HTTP/WS サーバーポート |
+| `PUBLIC_DIR` | `viewer/public` | 静的ファイルディレクトリ |
+
+### HTTPS 公開 (Tailscale)
+
 ```bash
-curl http://localhost:9223/json/version
+# viewer-server 起動後、出力された VIEWER_PORT で tailscale serve を設定
+tailscale serve --bg <VIEWER_PORT>
 ```
 
-### Playwright からの接続
+### スマホからのアクセス
+
+1. `https://<hostname>.ts.net/` にアクセス
+2. ブラウザのビューポートがフルスクリーンで表示される
+3. タッチ操作で直接ブラウザを操作可能
+4. キーボードボタン (右下) でソフトキーボードを表示
+5. 「ホーム画面に追加」で PWA としてインストール
+
+## AI (Claude Code) からの接続
+
+```bash
+# CDP 疎通確認 (出力された CDP_PORT を使用)
+curl http://localhost:<CDP_PORT>/json/version
+```
+
 ```javascript
-const browser = await playwright.chromium.connectOverCDP('http://localhost:9223');
+// Playwright
+const browser = await playwright.chromium.connectOverCDP('http://localhost:<CDP_PORT>');
+
+// Puppeteer
+const browser = await puppeteer.connect({ browserURL: 'http://localhost:<CDP_PORT>' });
 ```
-
-### Puppeteer からの接続
-```javascript
-const browser = await puppeteer.connect({ browserURL: 'http://localhost:9223' });
-```
-
-## 運用フロー
-
-1. `docker compose up -d` でコンテナ起動
-2. Android 端末のブラウザで `http://<server-ip>:8080` にアクセス
-3. admin パスワードでログインし、ブラウザを操作(認証、ログイン等)
-4. CC が `ws://localhost:9223` で CDP 接続し、自動化を引き継ぐ
-5. 作業完了後 `docker compose down` で停止
 
 ## セキュリティ考慮
 
-- CDP ポート (9223) は **localhost のみ** に公開すること (外部に露出させない)
-- WebRTC UI のパスワードは本番では強いものに変更すること
-- 必要に応じて Tailscale/WireGuard 等の VPN 経由でアクセスすること
-- chrome-profile ボリュームにはセッション情報が残るため適切に管理すること
+- CDP は 127.0.0.1 にのみバインドされる (Chrome のセキュリティ仕様)
+- PWA は Tailscale (WireGuard VPN) 経由の HTTPS でアクセス
+- chrome-profile にはセッション情報が残るため適切に管理すること
+
+## ビルド
+
+```bash
+# シングルバイナリのビルド
+bun build --compile viewer/server.ts --outfile viewer/viewer-server --target=bun-linux-x64
+```
 
 ## ファイル構成
 
 ```
 remote-browser/
-├── CLAUDE.md             # このファイル (プロジェクト説明)
-├── Dockerfile            # n.eko google-chrome + socat + CDP 対応
-├── docker-compose.yml    # サービス定義
-├── supervisord.conf      # Chrome + socat proxy + openbox 設定
-├── policies.json         # Chrome DevTools 有効化ポリシー
-└── openbox.xml           # ウィンドウマネージャ設定
+├── CLAUDE.md             # このファイル
+├── policies.json         # Chrome DevTools ポリシー (リファレンス)
+└── viewer/
+    ├── server.ts          # Chrome launcher + CDP bridge + HTTP server (Bun)
+    ├── viewer-server      # ビルド済みバイナリ
+    └── public/
+        ├── index.html     # PWA ビューア
+        ├── app.js         # Canvas 描画 + タッチ/キーボード入力
+        ├── style.css      # フルスクリーン スタイル
+        ├── manifest.json  # PWA マニフェスト
+        ├── sw.js          # Service Worker
+        └── icon.svg       # PWA アイコン
 ```
-
-## ベースプロジェクト
-
-- [m1k1o/neko](https://github.com/m1k1o/neko) - セルフホスト仮想ブラウザ (Apache-2.0)
-- [m1k1o/neko-apps](https://github.com/m1k1o/neko-apps) - neko アプリ集 (chrome-remote-debug)
-- 参考: [Issue #391](https://github.com/m1k1o/neko/issues/391) - Playwright + neko の議論
 
 ## コマンドリファレンス
 
 ```bash
+# 起動 (開発)
+bun run viewer/server.ts
+
+# 起動 (既存 Chrome に接続)
+CDP_PORT=9222 bun run viewer/server.ts
+
 # ビルド
-docker compose build
-
-# 起動
-docker compose up -d
-
-# ログ確認
-docker compose logs -f
-
-# 停止
-docker compose down
+bun build --compile viewer/server.ts --outfile viewer/viewer-server --target=bun-linux-x64
 
 # Chrome プロファイルのクリア
 rm -rf ./chrome-profile/*
 
-# CDP 疎通確認
-curl http://localhost:9223/json/version
+# HTTPS 公開
+tailscale serve --bg <VIEWER_PORT>
+
+# HTTPS 解除
+tailscale serve off
 ```

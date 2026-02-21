@@ -1,20 +1,14 @@
 services:
-  neko:
+  browser:
     build: .
-    restart: unless-stopped
-    shm_size: 2gb
-    cap_add:
-      - SYS_ADMIN
     ports:
-      - "8080:8080"
-      - "127.0.0.1:9223:9223"          # CDP (localhost only for security)
-      - "52000-52100:52000-52100/udp"
-    volumes:
-      - "./chrome-profile:/home/neko/chrome-profile"
+      - "3000"
+      - "9223"
+      - "6080"
     environment:
-      NEKO_DESKTOP_SCREEN: 1366x768@24
-      NEKO_MEMBER_MULTIUSER_USER_PASSWORD: neko
-      NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD: admin
-      NEKO_WEBRTC_EPR: 52000-52100
-      NEKO_WEBRTC_ICELITE: 1
-      # NEKO_WEBRTC_NAT1TO1: <server-ip>  # WebRTC NAT traversal: set to server's LAN or Tailscale IP
+      - CDP_PORT=9222
+      - PORT=3000
+    volumes:
+      - ./chrome-profile:/app/chrome-profile
+    shm_size: "2gb"
+    restart: unless-stopped

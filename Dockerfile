@@ -1,25 +1,25 @@
-FROM ghcr.io/m1k1o/neko/google-chrome:latest
+FROM oven/bun:1-debian AS base
 
-USER root
+# Chrome + Xvfb + 日本語フォント + websockify/noVNC
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget gnupg ca-certificates \
+    xvfb socat x11vnc \
+    novnc websockify \
+    fonts-noto-cjk fonts-noto-cjk-extra \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
-# socat: CDP proxy (Chrome binds DevTools to 127.0.0.1 only)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends socat && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+WORKDIR /app
 
-# supervisord config (Chrome + socat proxy + openbox)
-COPY supervisord.conf /etc/neko/supervisord/google-chrome.conf
+# ソースコピー
+COPY viewer/ ./viewer/
 
-# Enable DevTools (default policy disables it)
-COPY policies.json /etc/opt/chrome/policies/managed/policies.json
+# ポート: viewer HTTP/WS + CDP proxy + noVNC
+EXPOSE 3000 9223 6080
 
-# Window manager config
-COPY openbox.xml /etc/neko/openbox.xml
+# Chrome プロファイル
+VOLUME ["/app/chrome-profile"]
 
-# Chrome profile directory
-RUN mkdir -p /home/neko/chrome-profile && \
-    chown -R neko:neko /home/neko/chrome-profile
-
-# CDP proxy port
-EXPOSE 9223
+CMD ["bun", "run", "viewer/server.ts"]
