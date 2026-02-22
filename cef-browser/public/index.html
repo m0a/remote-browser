@@ -13,7 +13,14 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="url-bar"></div>
+  <div id="toolbar">
+    <button id="btn-back" class="tb-btn" aria-label="Back">&#x276E;</button>
+    <button id="btn-forward" class="tb-btn" aria-label="Forward">&#x276F;</button>
+    <button id="btn-reload" class="tb-btn" aria-label="Reload">&#x21BB;</button>
+    <form id="url-form">
+      <input id="url-input" type="url" placeholder="URL" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </form>
+  </div>
   <canvas id="screen"></canvas>
   <div id="status">Connecting...</div>
   <div id="dialog-overlay"></div>

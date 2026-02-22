@@ -365,6 +365,7 @@ typedef struct
     void (*on_title_change)(const char *title, void *context);
     void (*on_fullscreen_change)(bool fullscreen, void *context);
     void (*on_message)(const char *message, void *context);
+    void (*on_url_change)(const char *url, void *context);
     void (*on_js_dialog)(JSDialogType type, const char *message_text, const char *default_prompt_text, void *context);
     void (*on_file_dialog)(FileDialogMode mode, const char *title, const char *default_file_path, void *context);
     void *context;
@@ -668,6 +669,16 @@ extern "C"
     EXPORT RawWindowHandle webview_get_window_handle(void *webview);
 
     EXPORT void webview_set_focus(void *webview, bool enable);
+
+    EXPORT void webview_navigate(void *webview, const char *url);
+
+    EXPORT void webview_go_back(void *webview);
+
+    EXPORT void webview_go_forward(void *webview);
+
+    EXPORT void webview_reload(void *webview);
+
+    EXPORT const char *webview_get_url(void *webview);
 
 #ifdef __cplusplus
 }

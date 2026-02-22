@@ -46,6 +46,12 @@ void IWebViewLoad::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> 
 {
     _handler.on_state_change(WebViewState::WEW_LOADED, _handler.context);
     browser->GetHost()->SetFocus(true);
+
+    if (_handler.on_url_change && frame->IsMain())
+    {
+        std::string url = frame->GetURL().ToString();
+        _handler.on_url_change(url.c_str(), _handler.context);
+    }
 }
 
 void IWebViewLoad::OnLoadError(CefRefPtr<CefBrowser> browser,
@@ -652,4 +658,64 @@ void IWebView::SetFocus(bool enable)
     }
 
     _browser.value()->GetHost()->SetFocus(enable);
+}
+
+void IWebView::Navigate(std::string url)
+{
+    CHECK_REFCOUNTING();
+
+    if (!_browser.has_value())
+    {
+        return;
+    }
+
+    _browser.value()->GetMainFrame()->LoadURL(url);
+}
+
+void IWebView::GoBack()
+{
+    CHECK_REFCOUNTING();
+
+    if (!_browser.has_value())
+    {
+        return;
+    }
+
+    _browser.value()->GoBack();
+}
+
+void IWebView::GoForward()
+{
+    CHECK_REFCOUNTING();
+
+    if (!_browser.has_value())
+    {
+        return;
+    }
+
+    _browser.value()->GoForward();
+}
+
+void IWebView::Reload()
+{
+    CHECK_REFCOUNTING();
+
+    if (!_browser.has_value())
+    {
+        return;
+    }
+
+    _browser.value()->Reload();
+}
+
+std::string IWebView::GetURL()
+{
+    CHECK_REFCOUNTING("");
+
+    if (!_browser.has_value())
+    {
+        return "";
+    }
+
+    return _browser.value()->GetMainFrame()->GetURL().ToString();
 }

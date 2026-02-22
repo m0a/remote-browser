@@ -6,7 +6,11 @@
   var statusEl = document.getElementById("status");
   var kbToggle = document.getElementById("kb-toggle");
   var hiddenInput = document.getElementById("hidden-input");
-  var urlBar = document.getElementById("url-bar");
+  var urlInput = document.getElementById("url-input");
+  var btnBack = document.getElementById("btn-back");
+  var btnForward = document.getElementById("btn-forward");
+  var btnReload = document.getElementById("btn-reload");
+  var urlForm = document.getElementById("url-form");
 
   var dialogOverlay = document.getElementById("dialog-overlay");
 
@@ -120,8 +124,11 @@
         } else if (msg.type === "file_dialog") {
           showDialogNotification(msg);
         } else if (msg.type === "url") {
-          urlBar.textContent = msg.url;
-          urlBar.classList.remove("hidden");
+          if (document.activeElement !== urlInput) {
+            urlInput.value = msg.url;
+          }
+        } else if (msg.type === "title") {
+          document.title = msg.title + " - CEF Remote";
         } else if (msg.type === "error") {
           setStatus("error", msg.message);
         }
@@ -392,6 +399,43 @@
     }
   });
 
+  // --- Toolbar Controls ---
+
+  btnBack.addEventListener("click", function (e) {
+    e.stopPropagation();
+    send({ type: "go_back" });
+  });
+
+  btnForward.addEventListener("click", function (e) {
+    e.stopPropagation();
+    send({ type: "go_forward" });
+  });
+
+  btnReload.addEventListener("click", function (e) {
+    e.stopPropagation();
+    send({ type: "reload" });
+  });
+
+  urlForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var url = urlInput.value.trim();
+    if (url && url.indexOf("://") === -1 && url.indexOf(".") !== -1) {
+      url = "https://" + url;
+    }
+    if (url) {
+      send({ type: "navigate", url: url });
+      urlInput.blur();
+    }
+  });
+
+  // Prevent keyboard events from reaching the canvas when URL input is focused
+  urlInput.addEventListener("keydown", function (e) {
+    e.stopPropagation();
+  });
+  urlInput.addEventListener("keyup", function (e) {
+    e.stopPropagation();
+  });
+
   // --- Desktop Keyboard (physical) ---
 
   function getModifiers(e) {
@@ -404,7 +448,7 @@
   }
 
   document.addEventListener("keydown", function (e) {
-    if (document.activeElement === hiddenInput) return;
+    if (document.activeElement === hiddenInput || document.activeElement === urlInput) return;
     if (!connected) return;
 
     e.preventDefault();
@@ -435,7 +479,7 @@
   });
 
   document.addEventListener("keyup", function (e) {
-    if (document.activeElement === hiddenInput) return;
+    if (document.activeElement === hiddenInput || document.activeElement === urlInput) return;
     if (!connected) return;
 
     e.preventDefault();

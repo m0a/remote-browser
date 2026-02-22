@@ -306,3 +306,43 @@ void webview_set_focus(void *webview, bool enable)
 
     static_cast<WebView *>(webview)->ref->SetFocus(enable);
 }
+
+void webview_navigate(void *webview, const char *url)
+{
+    assert(webview != nullptr);
+
+    static_cast<WebView *>(webview)->ref->Navigate(std::string(url));
+}
+
+void webview_go_back(void *webview)
+{
+    assert(webview != nullptr);
+
+    static_cast<WebView *>(webview)->ref->GoBack();
+}
+
+void webview_go_forward(void *webview)
+{
+    assert(webview != nullptr);
+
+    static_cast<WebView *>(webview)->ref->GoForward();
+}
+
+void webview_reload(void *webview)
+{
+    assert(webview != nullptr);
+
+    static_cast<WebView *>(webview)->ref->Reload();
+}
+
+// Note: caller must NOT free the returned pointer; it is managed by C++ internal state.
+// This is a simplification; for a proper API we'd use a callback or copy.
+static thread_local std::string _url_buffer;
+
+const char *webview_get_url(void *webview)
+{
+    assert(webview != nullptr);
+
+    _url_buffer = static_cast<WebView *>(webview)->ref->GetURL();
+    return _url_buffer.c_str();
+}

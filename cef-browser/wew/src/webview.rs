@@ -228,6 +228,9 @@ pub trait WebViewHandler: Send + Sync {
     /// This callback is called when a message is received from the web page.
     fn on_message(&self, message: &str) {}
 
+    /// Called when the URL changes (after navigation completes).
+    fn on_url_change(&self, url: &str) {}
+
     /// Called when a JavaScript dialog is requested (alert/confirm/prompt).
     ///
     /// The native dialog is suppressed and auto-responded.
@@ -599,6 +602,7 @@ impl IWebView {
                     on_title_change: Some(on_title_change_callback),
                     on_fullscreen_change: Some(on_fullscreen_change_callback),
                     on_message: Some(on_message_callback),
+                    on_url_change: Some(on_url_change_callback),
                     on_js_dialog: Some(on_js_dialog_callback),
                     on_file_dialog: Some(on_file_dialog_callback),
                     context: context as _,
@@ -726,6 +730,27 @@ impl<W> WebView<W> {
     /// This function is used to set whether developer tools are enabled.
     pub fn devtools_enabled(&self, enable: bool) {
         unsafe { sys::webview_set_devtools_state(self.inner.raw.lock().as_ptr(), enable) }
+    }
+
+    /// Navigate to a URL
+    pub fn navigate(&self, url: &str) {
+        let url = CString::new(url).unwrap();
+        unsafe { sys::webview_navigate(self.inner.raw.lock().as_ptr(), url.as_raw()) }
+    }
+
+    /// Go back in history
+    pub fn go_back(&self) {
+        unsafe { sys::webview_go_back(self.inner.raw.lock().as_ptr()) }
+    }
+
+    /// Go forward in history
+    pub fn go_forward(&self) {
+        unsafe { sys::webview_go_forward(self.inner.raw.lock().as_ptr()) }
+    }
+
+    /// Reload the page
+    pub fn reload(&self) {
+        unsafe { sys::webview_reload(self.inner.raw.lock().as_ptr()) }
     }
 }
 
@@ -1030,6 +1055,23 @@ extern "C" fn on_message_callback(message: *const c_char, context: *mut c_void) 
             MixWebviewHnadler::WebViewHandler(handler) => handler.on_message(message),
             MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
                 handler.on_message(message)
+            }
+        }
+    }
+}
+
+extern "C" fn on_url_change_callback(url: *const c_char, context: *mut c_void) {
+    if context.is_null() || url.is_null() {
+        return;
+    }
+
+    let context = unsafe { &*(context as *mut WebViewContext) };
+
+    if let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() {
+        match &context.handler {
+            MixWebviewHnadler::WebViewHandler(handler) => handler.on_url_change(url),
+            MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
+                handler.on_url_change(url)
             }
         }
     }

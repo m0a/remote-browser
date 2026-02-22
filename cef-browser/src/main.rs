@@ -91,6 +91,14 @@ impl WebViewHandler for FrameHandler {
 
     fn on_title_change(&self, title: &str) {
         eprintln!("[CEF] Title: {}", title);
+        let event = serde_json::json!({ "type": "title", "title": title });
+        let _ = self.event_tx.send(event.to_string());
+    }
+
+    fn on_url_change(&self, url: &str) {
+        eprintln!("[CEF] URL: {}", url);
+        let event = serde_json::json!({ "type": "url", "url": url });
+        let _ = self.event_tx.send(event.to_string());
     }
 
     fn on_js_dialog(&self, dialog_type: u32, message_text: &str, default_prompt_text: &str) {
@@ -223,6 +231,14 @@ enum InputMessage {
     },
     #[serde(rename = "input_text")]
     Text { text: String },
+    #[serde(rename = "navigate")]
+    Navigate { url: String },
+    #[serde(rename = "go_back")]
+    GoBack {},
+    #[serde(rename = "go_forward")]
+    GoForward {},
+    #[serde(rename = "reload")]
+    Reload {},
 }
 
 #[derive(Deserialize)]
@@ -439,6 +455,19 @@ fn handle_input(state: &AppState, text: &str) {
                     focus_on_editable_field: true,
                 });
             }
+        }
+        InputMessage::Navigate { url } => {
+            eprintln!("[WS] Navigate to: {}", url);
+            webview.navigate(&url);
+        }
+        InputMessage::GoBack {} => {
+            webview.go_back();
+        }
+        InputMessage::GoForward {} => {
+            webview.go_forward();
+        }
+        InputMessage::Reload {} => {
+            webview.reload();
         }
     }
 }

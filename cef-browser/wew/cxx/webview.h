@@ -357,6 +357,11 @@ class IWebView : public CefClient
     void Resize(int width, int height);
     void SetDevToolsOpenState(bool is_open);
     void SendMessage(std::string message);
+    void Navigate(std::string url);
+    void GoBack();
+    void GoForward();
+    void Reload();
+    std::string GetURL();
     void OnKeyboard(cef_key_event_t event);
     void OnMouseClick(cef_mouse_event_t event, cef_mouse_button_type_t button, bool pressed);
     void OnMouseMove(cef_mouse_event_t event);
