@@ -1,14 +1,12 @@
 services:
   browser:
-    build: .
+    build: ./cef-browser
     ports:
       - "3000"
-      - "9223"
-      - "6080"
+      - "9222"
     environment:
       - CDP_PORT=9222
       - PORT=3000
-    volumes:
-      - ./chrome-profile:/app/chrome-profile
+      - START_URL=https://www.google.com
     shm_size: "2gb"
     restart: unless-stopped
