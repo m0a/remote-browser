@@ -160,7 +160,6 @@ name = "cef-browser"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64",
  "image",
  "parking_lot",
  "serde",

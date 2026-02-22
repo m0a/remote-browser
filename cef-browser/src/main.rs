@@ -9,7 +9,6 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use base64::Engine;
 use image::{ImageBuffer, Rgb, codecs::jpeg::JpegEncoder};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -61,8 +60,10 @@ impl RuntimeHandler for RuntimeObserver {
 
 struct FrameHandler {
     frame_tx: broadcast::Sender<FrameData>,
+    event_tx: broadcast::Sender<String>,
     width: u32,
     height: u32,
+    last_hash: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone)]
@@ -70,6 +71,17 @@ struct FrameData {
     jpeg: Vec<u8>,
     width: u32,
     height: u32,
+}
+
+fn simple_hash(data: &[u8]) -> u64 {
+    // Sample ~1024 bytes from the buffer for fast change detection
+    let step = if data.len() > 1024 { data.len() / 1024 } else { 1 };
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for i in (0..data.len()).step_by(step) {
+        hash ^= data[i] as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 impl WebViewHandler for FrameHandler {
@@ -93,6 +105,13 @@ impl WebViewHandler for FrameHandler {
             "[CEF] JS dialog suppressed: type={}, message={}, default={}",
             type_name, message_text, default_prompt_text
         );
+        let event = serde_json::json!({
+            "type": "js_dialog",
+            "dialogType": type_name,
+            "message": message_text,
+            "defaultPrompt": default_prompt_text,
+        });
+        let _ = self.event_tx.send(event.to_string());
     }
 
     fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {
@@ -107,6 +126,13 @@ impl WebViewHandler for FrameHandler {
             "[CEF] File dialog suppressed: mode={}, title={}, path={}",
             mode_name, title, default_file_path
         );
+        let event = serde_json::json!({
+            "type": "file_dialog",
+            "mode": mode_name,
+            "title": title,
+            "defaultPath": default_file_path,
+        });
+        let _ = self.event_tx.send(event.to_string());
     }
 }
 
@@ -115,6 +141,14 @@ impl WindowlessRenderWebViewHandler for FrameHandler {
         use std::sync::atomic::{AtomicU64, Ordering};
         static FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
         let count = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+
+        // Skip frames with no visual change
+        let hash = simple_hash(frame.buffer);
+        let prev = self.last_hash.swap(hash, Ordering::Relaxed);
+        if prev == hash && count > 0 {
+            return;
+        }
+
         if count % 30 == 0 {
             eprintln!(
                 "[CEF] Frame #{}: {}x{} buffer={}bytes",
@@ -212,6 +246,7 @@ struct TouchPoint {
 
 struct AppState {
     frame_tx: broadcast::Sender<FrameData>,
+    event_tx: broadcast::Sender<String>,
     webview: Mutex<Option<wew::webview::WebView<WindowlessRenderWebView>>>,
 }
 
@@ -226,22 +261,25 @@ async fn ws_handler(
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut frame_rx = state.frame_tx.subscribe();
+    let mut event_rx = state.event_tx.subscribe();
 
-    // Send/receive loop
+    // Send metadata as first message so client knows dimensions
+    // Then send binary JPEG frames with a 8-byte header (width:u32 + height:u32)
     loop {
         tokio::select! {
-            // Send frames to client
+            // Send frames as binary (header + JPEG)
             Ok(frame_data) = frame_rx.recv() => {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&frame_data.jpeg);
-                let msg = serde_json::json!({
-                    "type": "frame",
-                    "metadata": {
-                        "deviceWidth": frame_data.width,
-                        "deviceHeight": frame_data.height,
-                    },
-                    "data": b64,
-                });
-                if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
+                let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
+                buf.extend_from_slice(&frame_data.width.to_le_bytes());
+                buf.extend_from_slice(&frame_data.height.to_le_bytes());
+                buf.extend_from_slice(&frame_data.jpeg);
+                if socket.send(Message::Binary(buf.into())).await.is_err() {
+                    break;
+                }
+            }
+            // Send events as text JSON
+            Ok(event) = event_rx.recv() => {
+                if socket.send(Message::Text(event.into())).await.is_err() {
                     break;
                 }
             }
@@ -433,8 +471,9 @@ fn main() {
     eprintln!("[CEF-Browser] Starting with URL: {}", url);
     eprintln!("[CEF-Browser] Viewport: {}x{}", width, height);
 
-    // Frame broadcast channel (keep last 2 frames)
+    // Broadcast channels
     let (frame_tx, _) = broadcast::channel::<FrameData>(2);
+    let (event_tx, _) = broadcast::channel::<String>(16);
 
     // Create CEF runtime with multi-threaded message loop
     let message_loop = MultiThreadMessageLoop::default();
@@ -458,8 +497,10 @@ fn main() {
     // Create windowless webview
     let handler = FrameHandler {
         frame_tx: frame_tx.clone(),
+        event_tx: event_tx.clone(),
         width,
         height,
+        last_hash: std::sync::atomic::AtomicU64::new(0),
     };
 
     let webview = runtime
@@ -482,6 +523,7 @@ fn main() {
     // Shared state
     let state = Arc::new(AppState {
         frame_tx,
+        event_tx,
         webview: Mutex::new(Some(webview)),
     });
 

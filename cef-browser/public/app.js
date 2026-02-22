@@ -8,12 +8,15 @@
   var hiddenInput = document.getElementById("hidden-input");
   var urlBar = document.getElementById("url-bar");
 
+  var dialogOverlay = document.getElementById("dialog-overlay");
+
   var ws = null;
   var metadata = null;
   var frameRect = { x: 0, y: 0, width: 0, height: 0 };
   var lastImage = null;
   var connected = false;
   var reconnectTimer = null;
+  var dialogTimer = null;
 
   // --- Canvas Setup ---
 
@@ -90,16 +93,32 @@
       setStatus("connected");
     };
 
+    ws.binaryType = "arraybuffer";
+
     ws.onmessage = function (e) {
+      if (e.data instanceof ArrayBuffer) {
+        // Binary frame: [width:u32le][height:u32le][jpeg...]
+        var view = new DataView(e.data);
+        var w = view.getUint32(0, true);
+        var h = view.getUint32(4, true);
+        metadata = { deviceWidth: w, deviceHeight: h };
+        var jpegBlob = new Blob([new Uint8Array(e.data, 8)], { type: "image/jpeg" });
+        var url = URL.createObjectURL(jpegBlob);
+        var img = new Image();
+        img.onload = function () {
+          drawFrame(img);
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+        return;
+      }
+
       try {
         var msg = JSON.parse(e.data);
-        if (msg.type === "frame") {
-          metadata = msg.metadata;
-          var img = new Image();
-          img.onload = function () {
-            drawFrame(img);
-          };
-          img.src = "data:image/jpeg;base64," + msg.data;
+        if (msg.type === "js_dialog") {
+          showDialogNotification(msg);
+        } else if (msg.type === "file_dialog") {
+          showDialogNotification(msg);
         } else if (msg.type === "url") {
           urlBar.textContent = msg.url;
           urlBar.classList.remove("hidden");
@@ -435,6 +454,56 @@
   document.addEventListener("contextmenu", function (e) {
     e.preventDefault();
   });
+
+  // --- Dialog Notification ---
+
+  function showDialogNotification(msg) {
+    if (dialogTimer) {
+      clearTimeout(dialogTimer);
+    }
+
+    var icon, label, detail;
+    if (msg.type === "js_dialog") {
+      switch (msg.dialogType) {
+        case "alert":
+          icon = "\u26A0"; label = "Alert"; break;
+        case "confirm":
+          icon = "\u2753"; label = "Confirm (auto: OK)"; break;
+        case "prompt":
+          icon = "\u270F"; label = "Prompt (auto: " + (msg.defaultPrompt || "empty") + ")"; break;
+        case "beforeunload":
+          icon = "\u21A9"; label = "Before Unload (auto: allow)"; break;
+        default:
+          icon = "\u2139"; label = msg.dialogType; break;
+      }
+      detail = msg.message || "";
+    } else if (msg.type === "file_dialog") {
+      icon = "\uD83D\uDCC1";
+      label = "File Dialog: " + (msg.mode || "open") + " (blocked)";
+      detail = msg.title || "";
+    } else {
+      return;
+    }
+
+    dialogOverlay.innerHTML =
+      '<div class="dialog-icon">' + icon + '</div>' +
+      '<div class="dialog-body">' +
+        '<div class="dialog-label">' + label + '</div>' +
+        (detail ? '<div class="dialog-detail">' + escapeHtml(detail) + '</div>' : '') +
+      '</div>';
+    dialogOverlay.classList.add("visible");
+
+    dialogTimer = setTimeout(function () {
+      dialogOverlay.classList.remove("visible");
+      dialogTimer = null;
+    }, 4000);
+  }
+
+  function escapeHtml(s) {
+    var el = document.createElement("span");
+    el.textContent = s;
+    return el.innerHTML;
+  }
 
   // --- Service Worker ---
 
