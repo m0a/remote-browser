@@ -142,37 +142,47 @@ tailscale serve --bg <VIEWER_PORT>
 tailscale serve off
 ```
 
-## CEF Browser PoC (cef-browser/)
+## CEF Browser (cef-browser/)
 
-Rust + CEF (mycrl/wew) による次世代リモートブラウザ。
+Rust + CEF (mycrl/wew フォーク) による次世代リモートブラウザ。
 CEF の Off-Screen Rendering で直接ピクセルバッファを取得し、
-全ダイアログを DOM 化してネイティブダイアログをゼロにすることが目標。
+ネイティブダイアログをゼロにしている。
 
-### 現状 (Phase 1)
+### 機能
 
-- CEF OSR → BGRA → JPEG → WebSocket ストリーミング (30 FPS)
-- 既存 PWA ビューア互換プロトコル
+- CEF OSR → BGRA → JPEG → WebSocket バイナリフレーム (30 FPS)
+- ネイティブダイアログ完全抑制 (alert/confirm/prompt/file picker)
+- ダイアログイベントの viewer 通知 (トースト UI)
+- ブラウザツールバー (戻る/進む/リロード/URL バー)
 - CDP エンドポイント (`--remote-debugging-port`)
-- マウス/キーボード/タッチ入力中継
-- Xvfb 自動起動
+- マウス/キーボード/タッチ/スクロール入力中継
+- フレーム差分スキップ (変化なし時は送信しない)
 
-### 起動
+### 起動 (開発)
 
 ```bash
 cd cef-browser
 cargo build
-bash run.sh [URL]        # デフォルト: https://www.google.com
-# CDP_PORT=9222 で CDP が有効
-# PORT=3000 でビューアサーバーが起動
+bash run.sh [URL]
 ```
 
-### Phase 2 (TODO)
+### 起動 (Docker)
 
-- wew フォークでダイアログハンドラ追加 (CefDialogHandler, CefJSDialogHandler)
-- ファイルピッカー/Passkey を DOM 化
-- カスタムブラウザ UI (アドレスバー、タブ)
+```bash
+docker compose up -d
+docker compose ps   # ポート確認
+```
 
-### 依存
+### 環境変数
 
-- Rust 1.70+, cmake, ninja, clang (libclang)
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `PORT` | `3000` | HTTP/WS サーバーポート |
+| `CDP_PORT` | `9222` | Chrome DevTools Protocol ポート |
+| `START_URL` | `https://www.google.com` | 初期 URL |
+| `PUBLIC_DIR` | `public` | 静的ファイルディレクトリ |
+
+### 依存 (ネイティブビルド)
+
+- Rust 1.86+, cmake, ninja, clang (libclang)
 - Xvfb (xorg-server-xvfb)
