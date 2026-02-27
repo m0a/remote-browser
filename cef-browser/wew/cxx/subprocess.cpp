@@ -35,6 +35,52 @@ void ISubProcess::OnContextCreated(CefRefPtr<CefBrowser> browser,
 
     CefRefPtr<CefV8Value> global = context->GetGlobal();
     global->SetValue("MessageTransport", std::move(native), V8_PROPERTY_ATTRIBUTE_NONE);
+
+    // WebAuthn monkey-patch: intercept navigator.credentials.get/create
+    // to prevent native passkey dialogs that block OSR interaction.
+    if (frame->IsMain())
+    {
+        std::string script = R"(
+            (function() {
+                if (!navigator.credentials) return;
+
+                navigator.credentials.get = function(options) {
+                    if (!options || !options.publicKey) {
+                        return navigator.credentials.__proto__.get.call(navigator.credentials, options);
+                    }
+                    // Notify viewer (fire-and-forget)
+                    if (window.MessageTransport) {
+                        try {
+                            window.MessageTransport.send(JSON.stringify({
+                                type: 'webauthn_request',
+                                action: 'get',
+                                rpId: options.publicKey.rpId || window.location.hostname
+                            }));
+                        } catch(e) {}
+                    }
+                    // Immediately reject with NotAllowedError
+                    return Promise.reject(new DOMException('The operation was cancelled.', 'NotAllowedError'));
+                };
+
+                navigator.credentials.create = function(options) {
+                    if (!options || !options.publicKey) {
+                        return navigator.credentials.__proto__.create.call(navigator.credentials, options);
+                    }
+                    if (window.MessageTransport) {
+                        try {
+                            window.MessageTransport.send(JSON.stringify({
+                                type: 'webauthn_request',
+                                action: 'create',
+                                rpId: (options.publicKey.rp && options.publicKey.rp.id) || window.location.hostname
+                            }));
+                        } catch(e) {}
+                    }
+                    return Promise.reject(new DOMException('The operation was cancelled.', 'NotAllowedError'));
+                };
+            })();
+        )";
+        frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+    }
 }
 
 bool ISubProcess::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,

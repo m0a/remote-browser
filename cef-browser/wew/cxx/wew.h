@@ -242,6 +242,10 @@ typedef struct
 
     /// Specify whether signal handlers must be disabled on POSIX systems.
     bool disable_signal_handlers;
+
+    /// Comma delimited ordered list of language codes without any whitespace
+    /// that will be used in the "Accept-Language" HTTP header.
+    const char *accept_language_list;
 } RuntimeSettings;
 
 typedef struct

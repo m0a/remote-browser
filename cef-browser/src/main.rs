@@ -122,6 +122,15 @@ impl WebViewHandler for FrameHandler {
         let _ = self.event_tx.send(event.to_string());
     }
 
+    fn on_message(&self, message: &str) {
+        eprintln!("[CEF] Page message: {}", message);
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(message) {
+            if parsed.get("type").and_then(|t| t.as_str()) == Some("webauthn_request") {
+                let _ = self.event_tx.send(message.to_string());
+            }
+        }
+    }
+
     fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {
         let mode_name = match mode {
             0 => "open",
@@ -209,7 +218,7 @@ enum InputMessage {
         x: i32,
         y: i32,
         #[serde(rename = "deltaX")]
-        _delta_x: f64,
+        delta_x: f64,
         #[serde(rename = "deltaY")]
         delta_y: f64,
     },
@@ -239,6 +248,8 @@ enum InputMessage {
     GoForward {},
     #[serde(rename = "reload")]
     Reload {},
+    #[serde(rename = "webauthn_response")]
+    WebAuthnResponse { action: String },
 }
 
 #[derive(Deserialize)]
@@ -384,11 +395,11 @@ fn handle_input(state: &AppState, text: &str) {
             }
         }
         InputMessage::Scroll {
-            x, y, delta_y, ..
+            x, y, delta_x, delta_y,
         } => {
             webview.mouse(&MouseEvent::Move(Position { x, y }));
             webview.mouse(&MouseEvent::Wheel(Position {
-                x: 0,
+                x: -(delta_x as i32),
                 y: -(delta_y as i32),
             }));
         }
@@ -469,6 +480,14 @@ fn handle_input(state: &AppState, text: &str) {
         InputMessage::Reload {} => {
             webview.reload();
         }
+        InputMessage::WebAuthnResponse { action } => {
+            let msg = serde_json::json!({
+                "type": "webauthn_response",
+                "action": action,
+            });
+            eprintln!("[WS] Sending webauthn_response to CEF: {}", msg);
+            webview.send_message(&msg.to_string());
+        }
     }
 }
 
@@ -510,7 +529,9 @@ fn main() {
         .create_runtime_attributes_builder::<WindowlessRenderWebView>()
         .with_root_cache_path("/tmp/cef-browser-cache")
         .with_cache_path("/tmp/cef-browser-cache")
-        .with_log_severity(LogLevel::Error);
+        .with_log_severity(LogLevel::Error)
+        .with_locale("ja")
+        .with_accept_language_list("ja,en-US,en");
 
     let (ctx_tx, ctx_rx) = std::sync::mpsc::channel();
     let runtime = builder

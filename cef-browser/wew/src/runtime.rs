@@ -196,6 +196,9 @@ pub struct RuntimeAttributes<R, W> {
 
     /// Whether to disable signal handlers
     disable_signal_handlers: bool,
+
+    /// Accept-Language list (e.g. "ja,en-US,en")
+    accept_language_list: Option<CString>,
 }
 
 impl<W> RuntimeAttributes<MainThreadMessageLoop, W> {
@@ -333,6 +336,12 @@ impl<R, W> RuntimeAttributesBuilder<R, W> {
     /// Set the locales directory path
     pub fn with_locales_dir_path(mut self, value: &str) -> Self {
         self.0.locales_dir_path = Some(CString::new(value).unwrap());
+        self
+    }
+
+    /// Set the accept language list (e.g. "ja,en-US,en")
+    pub fn with_accept_language_list(mut self, value: &str) -> Self {
+        self.0.accept_language_list = Some(CString::new(value).unwrap());
         self
     }
 
@@ -511,6 +520,7 @@ impl IRuntime {
             external_message_pump: attr.external_message_pump,
             multi_threaded_message_loop: attr.multi_threaded_message_loop,
             log_severity: attr.log_severity.unwrap_or(LogLevel::Off).into(),
+            accept_language_list: attr.accept_language_list.as_raw(),
             custom_scheme: custom_scheme
                 .as_ref()
                 .map(|it| it as *const _)

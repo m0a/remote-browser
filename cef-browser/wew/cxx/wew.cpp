@@ -138,6 +138,11 @@ void *create_runtime(const RuntimeSettings *settings, RuntimeHandler handler)
         CefString(&cef_settings.locale).FromString(settings->locale);
     }
 
+    if (settings->accept_language_list != nullptr)
+    {
+        CefString(&cef_settings.accept_language_list).FromString(settings->accept_language_list);
+    }
+
     if (settings->log_file != nullptr)
     {
         CefString(&cef_settings.log_file).FromString(settings->log_file);

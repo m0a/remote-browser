@@ -56,4 +56,5 @@ exec ./cef-browser \
     --disable-gpu-compositing \
     --disable-software-rasterizer \
     --remote-debugging-port="$CDP_PORT" \
+    --lang=ja \
     "$@"

@@ -1,5 +1,4 @@
 chrome-profile/
-viewer/viewer-server
 
 # CEF Browser
 cef-browser/target/

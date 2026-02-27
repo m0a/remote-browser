@@ -138,7 +138,6 @@ html, body {
 #screen {
   display: block;
   width: 100%;
-  height: calc(100% - 40px - env(safe-area-inset-top, 0px));
   margin-top: calc(40px + env(safe-area-inset-top, 0px));
   touch-action: none;
 }
@@ -197,6 +196,32 @@ html, body {
   line-height: 1.4;
   word-break: break-word;
   color: #fff;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  justify-content: flex-end;
+}
+
+.dialog-btn {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.dialog-btn-cancel {
+  background: rgba(255, 59, 48, 0.8);
+  color: #fff;
+}
+
+.dialog-btn-cancel:active {
+  background: rgba(255, 59, 48, 1);
 }
 
 /* Safe area for notched phones */
