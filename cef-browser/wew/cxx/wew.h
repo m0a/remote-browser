@@ -372,6 +372,8 @@ typedef struct
     void (*on_url_change)(const char *url, void *context);
     void (*on_js_dialog)(JSDialogType type, const char *message_text, const char *default_prompt_text, void *context);
     void (*on_file_dialog)(FileDialogMode mode, const char *title, const char *default_file_path, void *context);
+    void (*on_download_started)(uint32_t id, const char *url, const char *filename, int64_t total_bytes, void *context);
+    void (*on_download_updated)(uint32_t id, int64_t received_bytes, int64_t total_bytes, int percent_complete, bool is_complete, bool is_cancelled, void *context);
     void *context;
 } WebViewHandler;
 

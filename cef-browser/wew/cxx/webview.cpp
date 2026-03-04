@@ -7,6 +7,9 @@
 
 #include "webview.h"
 
+#include <cstdlib>
+#include <filesystem>
+
 /* CefContextMenuHandler */
 
 void IWebViewContextMenu::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
@@ -350,6 +353,54 @@ bool IWebViewFileDialog::OnFileDialog(CefRefPtr<CefBrowser> browser,
     return true;
 }
 
+/* CefDownloadHandler */
+
+IWebViewDownload::IWebViewDownload(WebViewHandler &handler) : _handler(handler) {}
+
+bool IWebViewDownload::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                                         CefRefPtr<CefDownloadItem> download_item,
+                                         const CefString &suggested_name,
+                                         CefRefPtr<CefBeforeDownloadCallback> callback)
+{
+    std::string download_dir = "./downloads";
+    const char *env_dir = std::getenv("DOWNLOAD_DIR");
+    if (env_dir && std::string(env_dir).length() > 0)
+        download_dir = std::string(env_dir);
+
+    std::filesystem::create_directories(download_dir);
+
+    std::string filename = suggested_name.ToString();
+    std::string download_path = download_dir + "/" + filename;
+
+    if (_handler.on_download_started)
+    {
+        uint32_t id = download_item->GetId();
+        std::string url = download_item->GetURL().ToString();
+        int64_t total = download_item->GetTotalBytes();
+        _handler.on_download_started(id, url.c_str(), filename.c_str(), total, _handler.context);
+    }
+
+    callback->Continue(download_path, false);
+    return true;
+}
+
+void IWebViewDownload::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefDownloadItem> download_item,
+                                          CefRefPtr<CefDownloadItemCallback> callback)
+{
+    if (_handler.on_download_updated)
+    {
+        _handler.on_download_updated(
+            download_item->GetId(),
+            download_item->GetReceivedBytes(),
+            download_item->GetTotalBytes(),
+            download_item->GetPercentComplete(),
+            download_item->IsComplete(),
+            download_item->IsCanceled(),
+            _handler.context);
+    }
+}
+
 /* CefRequestHandler */
 
 IWebViewRequest::IWebViewRequest(const WebViewSettings *settings)
@@ -383,6 +434,7 @@ IWebView::IWebView(CefSettings &cef_settings, const WebViewSettings *settings, W
     _context_menu_handler = new IWebViewContextMenu();
     _js_dialog_handler = new IWebViewJSDialog(_handler);
     _file_dialog_handler = new IWebViewFileDialog(_handler);
+    _download_handler = new IWebViewDownload(_handler);
 
     if (cef_settings.windowless_rendering_enabled)
     {
@@ -461,6 +513,13 @@ CefRefPtr<CefDialogHandler> IWebView::GetDialogHandler()
     CHECK_REFCOUNTING(nullptr);
 
     return _file_dialog_handler;
+}
+
+CefRefPtr<CefDownloadHandler> IWebView::GetDownloadHandler()
+{
+    CHECK_REFCOUNTING(nullptr);
+
+    return _download_handler;
 }
 
 bool IWebView::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,

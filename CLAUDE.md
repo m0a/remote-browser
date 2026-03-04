@@ -42,19 +42,24 @@ AI:    agent-browser --cdp 9222 (localhost)
 - IME 日本語入力対応
 - フレーム差分スキップ (変化なし時は送信しない)
 - 日本語ロケール (Accept-Language: ja)
+- ファイルダウンロード (`DOWNLOAD_DIR` に保存 + viewer トースト通知)
 
 ## 起動 (開発)
 
 ```bash
 cd cef-browser
 cargo build
-bash run.sh [URL]
+./target/debug/cef-browser [URL]
 ```
 
-起動すると stdout に以下が出力される:
+`cargo build` 時に CEF ランタイムファイルと public/ が `target/debug/` に自動バンドルされる。
+rpath 設定済みのため `LD_LIBRARY_PATH` 不要。Xvfb / Tailscale も自動起動。
+
+起動すると stderr に以下が出力される:
 ```
 VIEWER_PORT=3000
 CDP_PORT=9222
+TAILSCALE_URL=https://<hostname>.ts.net/
 ```
 
 ## 起動 (Docker)
@@ -72,6 +77,7 @@ docker compose ps   # ポート確認
 | `CDP_PORT` | `9222` | Chrome DevTools Protocol ポート |
 | `START_URL` | `https://www.google.com` | 初期 URL |
 | `PUBLIC_DIR` | `public` | 静的ファイルディレクトリ |
+| `DOWNLOAD_DIR` | `./downloads` | ダウンロードファイルの保存先 |
 
 ## HTTPS 公開 (Tailscale)
 
@@ -114,9 +120,9 @@ remote-browser/
 └── cef-browser/
     ├── Cargo.toml
     ├── Cargo.lock
+    ├── build.rs           # CEF ファイルバンドル + rpath 設定
     ├── Dockerfile
     ├── .dockerignore
-    ├── run.sh
     ├── src/
     │   └── main.rs          # HTTP/WS サーバー + 入力ハンドリング
     ├── public/
@@ -135,14 +141,14 @@ remote-browser/
 
 ```bash
 # 起動 (開発)
-cd cef-browser && cargo build && bash run.sh [URL]
+cd cef-browser && cargo build && ./target/debug/cef-browser [URL]
+
+# 環境変数で設定をオーバーライド
+PORT=8080 CDP_PORT=9333 START_URL=https://example.com ./target/debug/cef-browser
+
+# Tailscale 無効化
+NO_TAILSCALE=1 ./target/debug/cef-browser
 
 # Docker ビルド + 起動
 docker compose up -d --build
-
-# HTTPS 公開
-tailscale serve --bg 3000
-
-# HTTPS 解除
-tailscale serve off
 ```

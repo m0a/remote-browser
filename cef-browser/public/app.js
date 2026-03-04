@@ -217,6 +217,12 @@
           document.title = msg.title + " - CEF Remote";
         } else if (msg.type === "webauthn_request") {
           showWebAuthnDialog(msg);
+        } else if (msg.type === "download_started") {
+          showDownloadNotification(msg);
+        } else if (msg.type === "download_updated") {
+          if (msg.isComplete || msg.isCancelled) {
+            showDownloadCompleteNotification(msg);
+          }
         } else if (msg.type === "error") {
           setStatus("error", msg.message);
         }
@@ -895,6 +901,51 @@
       dialogOverlay.classList.remove("visible");
       dialogTimer = null;
     }, 5000);
+  }
+
+  // --- Download Notifications ---
+
+  function showDownloadNotification(msg) {
+    if (dialogTimer) { clearTimeout(dialogTimer); dialogTimer = null; }
+    var sizeStr = msg.totalBytes > 0 ? " (" + formatBytes(msg.totalBytes) + ")" : "";
+    dialogOverlay.innerHTML =
+      '<div class="dialog-icon">\u2B07</div>' +
+      '<div class="dialog-body">' +
+        '<div class="dialog-label">Download started</div>' +
+        '<div class="dialog-detail">' + escapeHtml(msg.filename || "file") + sizeStr + '</div>' +
+      '</div>';
+    dialogOverlay.classList.add("visible");
+    dialogOverlay.style.pointerEvents = "none";
+    dialogTimer = setTimeout(function () {
+      dialogOverlay.classList.remove("visible");
+      dialogTimer = null;
+    }, 4000);
+  }
+
+  function showDownloadCompleteNotification(msg) {
+    if (dialogTimer) { clearTimeout(dialogTimer); dialogTimer = null; }
+    var icon = msg.isCancelled ? "\u274C" : "\u2705";
+    var label = msg.isCancelled ? "Download cancelled" : "Download complete";
+    var sizeStr = msg.totalBytes > 0 ? " (" + formatBytes(msg.totalBytes) + ")" : "";
+    dialogOverlay.innerHTML =
+      '<div class="dialog-icon">' + icon + '</div>' +
+      '<div class="dialog-body">' +
+        '<div class="dialog-label">' + label + '</div>' +
+        '<div class="dialog-detail">' + escapeHtml("ID: " + msg.id) + sizeStr + '</div>' +
+      '</div>';
+    dialogOverlay.classList.add("visible");
+    dialogOverlay.style.pointerEvents = "none";
+    dialogTimer = setTimeout(function () {
+      dialogOverlay.classList.remove("visible");
+      dialogTimer = null;
+    }, 5000);
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
   }
 
   function escapeHtml(s) {

@@ -270,6 +270,9 @@ fn main() -> Result<()> {
 
     make_library(&outdir, cef_dir)?;
 
+    // Export CEF directory path for dependent crates
+    println!("cargo:CEF_DIR={}", cef_dir);
+
     println!("cargo:rustc-link-lib=static=wew-sys");
     println!("cargo:rustc-link-search=all={}", &outdir);
 

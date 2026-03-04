@@ -265,6 +265,25 @@ class IWebViewFileDialog : public CefDialogHandler
     IMPLEMENT_REFCOUNTING(IWebViewFileDialog);
 };
 
+class IWebViewDownload : public CefDownloadHandler
+{
+  public:
+    IWebViewDownload(WebViewHandler &handler);
+
+    bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefDownloadItem> download_item,
+                          const CefString &suggested_name,
+                          CefRefPtr<CefBeforeDownloadCallback> callback) override;
+
+    void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefDownloadItem> download_item,
+                           CefRefPtr<CefDownloadItemCallback> callback) override;
+
+  private:
+    WebViewHandler &_handler;
+    IMPLEMENT_REFCOUNTING(IWebViewDownload);
+};
+
 class IWebViewRequest : public CefRequestHandler
 {
   public:
@@ -342,6 +361,8 @@ class IWebView : public CefClient
     ///
     CefRefPtr<CefDialogHandler> GetDialogHandler() override;
 
+    CefRefPtr<CefDownloadHandler> GetDownloadHandler() override;
+
     ///
     /// Called when a new message is received from a different process.
     ///
@@ -381,6 +402,7 @@ class IWebView : public CefClient
     CefRefPtr<IWebViewContextMenu> _context_menu_handler = nullptr;
     CefRefPtr<IWebViewJSDialog> _js_dialog_handler = nullptr;
     CefRefPtr<IWebViewFileDialog> _file_dialog_handler = nullptr;
+    CefRefPtr<IWebViewDownload> _download_handler = nullptr;
 
     std::optional<CefRefPtr<CefBrowser>> _browser = std::nullopt;
     WebViewHandler _handler;

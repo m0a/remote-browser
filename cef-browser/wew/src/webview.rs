@@ -242,6 +242,12 @@ pub trait WebViewHandler: Send + Sync {
     /// The native dialog is suppressed and cancelled.
     /// Override this to implement custom DOM-based file picker.
     fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {}
+
+    /// Called when a download starts.
+    fn on_download_started(&self, id: u32, url: &str, filename: &str, total_bytes: i64) {}
+
+    /// Called when a download is updated (progress, complete, or cancelled).
+    fn on_download_updated(&self, id: u32, received_bytes: i64, total_bytes: i64, percent_complete: i32, is_complete: bool, is_cancelled: bool) {}
 }
 
 /// Windowless render web view handler
@@ -605,6 +611,8 @@ impl IWebView {
                     on_url_change: Some(on_url_change_callback),
                     on_js_dialog: Some(on_js_dialog_callback),
                     on_file_dialog: Some(on_file_dialog_callback),
+                    on_download_started: Some(on_download_started_callback),
+                    on_download_updated: Some(on_download_updated_callback),
                     context: context as _,
                 },
             )
@@ -1126,6 +1134,72 @@ extern "C" fn on_js_dialog_callback(
         MixWebviewHnadler::WebViewHandler(handler) => handler.on_js_dialog(dt, message, prompt),
         MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
             handler.on_js_dialog(dt, message, prompt)
+        }
+    }
+}
+
+extern "C" fn on_download_started_callback(
+    id: u32,
+    url: *const c_char,
+    filename: *const c_char,
+    total_bytes: i64,
+    context: *mut c_void,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    let context = unsafe { &*(context as *mut WebViewContext) };
+
+    let url_str = if url.is_null() {
+        ""
+    } else {
+        match unsafe { CStr::from_ptr(url) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        }
+    };
+
+    let filename_str = if filename.is_null() {
+        ""
+    } else {
+        match unsafe { CStr::from_ptr(filename) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        }
+    };
+
+    match &context.handler {
+        MixWebviewHnadler::WebViewHandler(handler) => {
+            handler.on_download_started(id, url_str, filename_str, total_bytes)
+        }
+        MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
+            handler.on_download_started(id, url_str, filename_str, total_bytes)
+        }
+    }
+}
+
+extern "C" fn on_download_updated_callback(
+    id: u32,
+    received_bytes: i64,
+    total_bytes: i64,
+    percent_complete: c_int,
+    is_complete: bool,
+    is_cancelled: bool,
+    context: *mut c_void,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    let context = unsafe { &*(context as *mut WebViewContext) };
+
+    match &context.handler {
+        MixWebviewHnadler::WebViewHandler(handler) => {
+            handler.on_download_updated(id, received_bytes, total_bytes, percent_complete as i32, is_complete, is_cancelled)
+        }
+        MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
+            handler.on_download_updated(id, received_bytes, total_bytes, percent_complete as i32, is_complete, is_cancelled)
         }
     }
 }

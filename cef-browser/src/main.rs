@@ -1,3 +1,4 @@
+use std::process::{Child, Command};
 use std::sync::Arc;
 
 use axum::{
@@ -129,6 +130,27 @@ impl WebViewHandler for FrameHandler {
                 let _ = self.event_tx.send(message.to_string());
             }
         }
+    }
+
+    fn on_download_started(&self, id: u32, url: &str, filename: &str, total_bytes: i64) {
+        eprintln!("[CEF] Download started: id={} file={} size={}", id, filename, total_bytes);
+        let event = serde_json::json!({
+            "type": "download_started",
+            "id": id, "url": url, "filename": filename, "totalBytes": total_bytes,
+        });
+        let _ = self.event_tx.send(event.to_string());
+    }
+
+    fn on_download_updated(&self, id: u32, received_bytes: i64, total_bytes: i64, percent_complete: i32, is_complete: bool, is_cancelled: bool) {
+        if is_complete || is_cancelled {
+            eprintln!("[CEF] Download {}: id={}", if is_complete { "complete" } else { "cancelled" }, id);
+        }
+        let event = serde_json::json!({
+            "type": "download_updated",
+            "id": id, "receivedBytes": received_bytes, "totalBytes": total_bytes,
+            "percentComplete": percent_complete, "isComplete": is_complete, "isCancelled": is_cancelled,
+        });
+        let _ = self.event_tx.send(event.to_string());
     }
 
     fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {
@@ -491,6 +513,125 @@ fn handle_input(state: &AppState, text: &str) {
     }
 }
 
+// --- Setup helpers ---
+
+/// Resolve PUBLIC_DIR: env var > sibling "public" dir > CWD "public"
+fn resolve_public_dir() -> String {
+    if let Ok(dir) = std::env::var("PUBLIC_DIR") {
+        return dir;
+    }
+    // Try relative to binary location
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("public");
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    "public".to_string()
+}
+
+/// Ensure DISPLAY is set, spawn Xvfb if needed
+fn ensure_display() -> Option<Child> {
+    if std::env::var("DISPLAY").is_ok() {
+        return None;
+    }
+    let display = ":99";
+    match Command::new("Xvfb")
+        .args([display, "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            // SAFETY: called before any threads are spawned
+            unsafe { std::env::set_var("DISPLAY", display); }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            eprintln!("[setup] Xvfb started on {} (PID: {})", display, child.id());
+            Some(child)
+        }
+        Err(e) => {
+            eprintln!("[setup] Warning: Failed to start Xvfb: {}", e);
+            eprintln!("[setup] Set DISPLAY env var or install xorg-server-xvfb");
+            None
+        }
+    }
+}
+
+/// Re-exec with CEF flags if not already present
+fn ensure_cef_flags() {
+    let args: Vec<String> = std::env::args().collect();
+
+    // If --no-sandbox is already present, flags were injected
+    if args.iter().any(|a| a == "--no-sandbox") {
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("Failed to get current exe path");
+    let cdp_port = std::env::var("CDP_PORT").unwrap_or_else(|_| "9222".to_string());
+
+    let cef_flags = [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--disable-software-rasterizer",
+        &format!("--remote-debugging-port={}", cdp_port),
+        "--lang=ja",
+    ];
+
+    // Collect user args (skip argv[0])
+    let user_args: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
+
+    // Re-exec with CEF flags + user args
+    use std::os::unix::process::CommandExt;
+    let err = Command::new(exe)
+        .args(&cef_flags)
+        .args(&user_args)
+        .exec();
+
+    // exec() only returns on error
+    eprintln!("[setup] Failed to re-exec: {}", err);
+    std::process::exit(1);
+}
+
+/// Setup Tailscale serve (non-blocking, best-effort)
+fn setup_tailscale(port: u16) -> bool {
+    if std::env::var("NO_TAILSCALE").is_ok() {
+        return false;
+    }
+    match Command::new("tailscale")
+        .args(["serve", "--bg", &port.to_string()])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            // Get hostname for display
+            if let Ok(status_output) = Command::new("tailscale")
+                .args(["status", "--json"])
+                .output()
+            {
+                if let Ok(status) = serde_json::from_slice::<serde_json::Value>(&status_output.stdout) {
+                    if let Some(dns) = status["Self"]["DNSName"].as_str() {
+                        let hostname = dns.trim_end_matches('.');
+                        eprintln!("TAILSCALE_URL=https://{}/", hostname);
+                    }
+                }
+            }
+            true
+        }
+        _ => {
+            eprintln!("[setup] tailscale serve: not available (skipped)");
+            false
+        }
+    }
+}
+
+fn teardown_tailscale() {
+    let _ = Command::new("tailscale")
+        .args(["serve", "--https=443", "off"])
+        .output();
+}
+
 // --- Main ---
 
 fn main() {
@@ -499,6 +640,12 @@ fn main() {
         wew::execute_subprocess();
         return;
     }
+
+    // Ensure CEF flags are present (re-execs if needed)
+    ensure_cef_flags();
+
+    // Setup Xvfb if no DISPLAY
+    let mut _xvfb = ensure_display();
 
     let width: u32 = 1280;
     let height: u32 = 720;
@@ -509,12 +656,19 @@ fn main() {
     let url = std::env::args()
         .skip(1)
         .find(|arg| !arg.starts_with("--"))
+        .or_else(|| std::env::var("START_URL").ok())
         .unwrap_or_else(|| "https://www.google.com".to_string());
 
     // Detect CDP port from command line args (--remote-debugging-port=XXXX)
     let cdp_port: Option<u16> = std::env::args()
         .find(|arg| arg.starts_with("--remote-debugging-port="))
         .and_then(|arg| arg.split('=').nth(1).and_then(|v| v.parse().ok()));
+
+    // Create download directory
+    let download_dir = std::env::var("DOWNLOAD_DIR").unwrap_or_else(|_| "./downloads".to_string());
+    std::fs::create_dir_all(&download_dir).ok();
+    unsafe { std::env::set_var("DOWNLOAD_DIR", &download_dir); }
+    eprintln!("[CEF-Browser] Download directory: {}", download_dir);
 
     eprintln!("[CEF-Browser] Starting with URL: {}", url);
     eprintln!("[CEF-Browser] Viewport: {}x{}", width, height);
@@ -580,7 +734,7 @@ fn main() {
     // Start HTTP/WS server on tokio runtime
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(async {
-        let public_dir = std::env::var("PUBLIC_DIR").unwrap_or_else(|_| "public".to_string());
+        let public_dir = resolve_public_dir();
 
         let app = Router::new()
             .route("/ws", get(ws_handler))
@@ -597,8 +751,27 @@ fn main() {
             eprintln!("CDP_PORT={}", cdp);
         }
 
+        // Setup Tailscale (best-effort)
+        let tailscale_enabled = setup_tailscale(port);
+
+        // Cleanup on shutdown
+        let shutdown = async move {
+            tokio::signal::ctrl_c().await.ok();
+            eprintln!("\n[CEF-Browser] Shutting down...");
+            if tailscale_enabled {
+                teardown_tailscale();
+                eprintln!("[setup] tailscale serve: disabled");
+            }
+        };
+
         axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown)
             .await
             .expect("Server error");
     });
+
+    // Cleanup Xvfb
+    if let Some(ref mut xvfb) = _xvfb {
+        let _ = xvfb.kill();
+    }
 }
