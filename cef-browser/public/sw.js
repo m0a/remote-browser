@@ -1,4 +1,4 @@
-const CACHE_NAME = "remote-browser-v1";
+const CACHE_NAME = "remote-browser-v2";
 const SHELL_FILES = [
   "/",
   "/index.html",
@@ -29,8 +29,8 @@ self.addEventListener("activate", (e) => {
 });
 
 self.addEventListener("fetch", (e) => {
-  // Don't cache WebSocket requests
-  if (e.request.url.includes("/ws")) return;
+  // Don't cache WebSocket or API requests
+  if (e.request.url.includes("/ws") || e.request.url.includes("/api/")) return;
 
   // Network first, fallback to cache
   e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));

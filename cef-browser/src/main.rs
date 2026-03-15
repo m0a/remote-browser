@@ -71,6 +71,7 @@ struct FrameHandler {
     last_hash: std::sync::atomic::AtomicU64,
     current_url: Arc<Mutex<String>>,
     current_title: Arc<Mutex<String>>,
+    last_frame: Arc<Mutex<Option<FrameData>>>,
 }
 
 #[derive(Clone)]
@@ -212,6 +213,7 @@ impl WindowlessRenderWebViewHandler for FrameHandler {
             width: self.width,
             height: self.height,
         };
+        *self.last_frame.lock() = Some(data.clone());
         let _ = self.frame_tx.send(data);
     }
 }
@@ -308,6 +310,7 @@ struct Session {
     webview: Mutex<Option<wew::webview::WebView<WindowlessRenderWebView>>>,
     current_url: Arc<Mutex<String>>,
     current_title: Arc<Mutex<String>>,
+    last_frame: Arc<Mutex<Option<FrameData>>>,
 }
 
 // --- Session command channel (main thread handles CEF operations) ---
@@ -356,6 +359,18 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
         let _ = socket.send(Message::Text(r#"{"type":"error","message":"Session not found"}"#.into())).await;
         return;
     };
+
+    // Send last cached frame immediately so the viewer isn't blank
+    {
+        let cached = session.last_frame.lock().clone();
+        if let Some(frame_data) = cached {
+            let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
+            buf.extend_from_slice(&frame_data.width.to_le_bytes());
+            buf.extend_from_slice(&frame_data.height.to_le_bytes());
+            buf.extend_from_slice(&frame_data.jpeg);
+            let _ = socket.send(Message::Binary(buf.into())).await;
+        }
+    }
 
     let mut frame_rx = session.frame_tx.subscribe();
     let mut event_rx = session.event_tx.subscribe();
@@ -876,6 +891,7 @@ fn main() {
         let (event_tx, _) = broadcast::channel(16);
         let current_url = Arc::new(Mutex::new(url.to_string()));
         let current_title = Arc::new(Mutex::new(String::new()));
+        let last_frame = Arc::new(Mutex::new(None));
 
         let handler = FrameHandler {
             frame_tx: frame_tx.clone(),
@@ -886,6 +902,7 @@ fn main() {
             last_hash: std::sync::atomic::AtomicU64::new(0),
             current_url: current_url.clone(),
             current_title: current_title.clone(),
+            last_frame: last_frame.clone(),
         };
 
         let webview = runtime.create_webview(
@@ -910,6 +927,7 @@ fn main() {
             webview: Mutex::new(Some(webview)),
             current_url,
             current_title,
+            last_frame,
         });
         state.sessions.lock().insert(id, session.clone());
         session
