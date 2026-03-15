@@ -62,13 +62,6 @@ CDP_PORT=9222
 TAILSCALE_URL=https://<hostname>.ts.net/
 ```
 
-## 起動 (Docker)
-
-```bash
-docker compose up -d
-docker compose ps   # ポート確認
-```
-
 ## 環境変数
 
 | 変数 | デフォルト | 説明 |
@@ -115,14 +108,11 @@ agent-browser --cdp 9222 snapshot -i
 ```
 remote-browser/
 ├── CLAUDE.md
-├── docker-compose.yml
 ├── .gitignore
 └── cef-browser/
     ├── Cargo.toml
     ├── Cargo.lock
     ├── build.rs           # CEF ファイルバンドル + rpath 設定
-    ├── Dockerfile
-    ├── .dockerignore
     ├── src/
     │   └── main.rs          # HTTP/WS サーバー + 入力ハンドリング
     ├── public/
@@ -148,7 +138,4 @@ PORT=8080 CDP_PORT=9333 START_URL=https://example.com ./target/debug/cef-browser
 
 # Tailscale 無効化
 NO_TAILSCALE=1 ./target/debug/cef-browser
-
-# Docker ビルド + 起動
-docker compose up -d --build
 ```

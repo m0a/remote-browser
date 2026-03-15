@@ -13,6 +13,10 @@
   var urlForm = document.getElementById("url-form");
 
   var dialogOverlay = document.getElementById("dialog-overlay");
+  var tabsEl = document.getElementById("tabs");
+  var tabNewBtn = document.getElementById("tab-new");
+  var sessions = [];
+  var activeSessionId = null;
 
   var ws = null;
   var metadata = null;
@@ -39,7 +43,7 @@
     var w = vv ? vv.width : window.innerWidth;
     var h = vv ? vv.height : window.innerHeight;
     // Subtract toolbar (40px) from available height
-    var canvasH = h - 40;
+    var canvasH = h - 72;
     if (canvasH < 100) canvasH = 100;
 
     canvas.width = w * dpr;
@@ -176,7 +180,9 @@
     }
 
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(proto + "//" + location.host + "/ws");
+    var wsUrl = proto + "//" + location.host + "/ws";
+    if (activeSessionId) wsUrl += "?session=" + activeSessionId;
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = function () {
       connected = true;
@@ -213,8 +219,12 @@
           if (document.activeElement !== urlInput) {
             urlInput.value = msg.url;
           }
+          var s = sessions.find(function(x) { return x.id === activeSessionId; });
+          if (s) { s.url = msg.url; renderTabs(); }
         } else if (msg.type === "title") {
           document.title = msg.title + " - CEF Remote";
+          var s = sessions.find(function(x) { return x.id === activeSessionId; });
+          if (s) { s.title = msg.title; renderTabs(); }
         } else if (msg.type === "webauthn_request") {
           showWebAuthnDialog(msg);
         } else if (msg.type === "download_started") {
@@ -564,6 +574,7 @@
 
   canvas.addEventListener("mousedown", function (e) {
     mouseDown = true;
+    canvas.focus();
     var coords = clientToCDP(e.clientX, e.clientY);
     if (coords) {
       send({
@@ -954,6 +965,99 @@
     return el.innerHTML;
   }
 
+  // --- Tab Management ---
+
+  function fetchSessions() {
+    fetch("/api/sessions")
+      .then(function(r) { return r.json(); })
+      .then(function(list) {
+        sessions = list;
+        renderTabs();
+        // If no active session, pick the first one
+        if (!activeSessionId && sessions.length > 0) {
+          switchToSession(sessions[0].id);
+        }
+      })
+      .catch(function(err) { console.error("Failed to fetch sessions:", err); });
+  }
+
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    sessions.forEach(function(s) {
+      var tab = document.createElement("div");
+      tab.className = "tab" + (s.id === activeSessionId ? " active" : "");
+      tab.dataset.id = s.id;
+
+      var label = document.createElement("span");
+      label.className = "tab-label";
+      label.textContent = s.title || s.url || "Tab " + s.id;
+      tab.appendChild(label);
+
+      if (sessions.length > 1) {
+        var closeBtn = document.createElement("button");
+        closeBtn.className = "tab-close";
+        closeBtn.innerHTML = "&times;";
+        closeBtn.addEventListener("click", function(e) {
+          e.stopPropagation();
+          closeSession(s.id);
+        });
+        tab.appendChild(closeBtn);
+      }
+
+      tab.addEventListener("click", function() {
+        if (activeSessionId !== s.id) {
+          switchToSession(s.id);
+        }
+      });
+
+      tabsEl.appendChild(tab);
+    });
+  }
+
+  function switchToSession(id) {
+    activeSessionId = id;
+    renderTabs();
+    // Reconnect WebSocket to the new session
+    lastImage = null;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (ws) { ws.close(); ws = null; }
+    connect();
+  }
+
+  function createNewSession() {
+    fetch("/api/sessions", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({url: "https://www.google.com"}) })
+      .then(function(r) { return r.json(); })
+      .then(function(s) {
+        sessions.push(s);
+        switchToSession(s.id);
+      })
+      .catch(function(err) { console.error("Failed to create session:", err); });
+  }
+
+  function closeSession(id) {
+    fetch("/api/sessions/" + id, { method: "DELETE" })
+      .then(function() {
+        sessions = sessions.filter(function(s) { return s.id !== id; });
+        if (activeSessionId === id) {
+          if (sessions.length > 0) {
+            switchToSession(sessions[0].id);
+          } else {
+            activeSessionId = null;
+            renderTabs();
+          }
+        } else {
+          renderTabs();
+        }
+      })
+      .catch(function(err) { console.error("Failed to close session:", err); });
+  }
+
+  tabNewBtn.addEventListener("click", function(e) {
+    e.stopPropagation();
+    createNewSession();
+  });
+
   // --- Service Worker ---
 
   if ("serviceWorker" in navigator) {
@@ -967,5 +1071,5 @@
     window.visualViewport.addEventListener("resize", resizeCanvas);
   }
   resizeCanvas();
-  connect();
+  fetchSessions();
 })();

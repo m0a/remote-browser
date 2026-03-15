@@ -18,23 +18,26 @@ cef-browser (Rust シングルバイナリ)
   ├── CEF OSR → BGRA → JPEG → WebSocket バイナリフレーム (30 FPS)
   ├── HTTP/WS サーバー (PORT=3000)
   │     ├── PWA 静的ファイル配信
-  │     ├── フレーム配信 (WebSocket binary)
+  │     ├── Session REST API (/api/sessions)
+  │     ├── フレーム配信 (/ws?session=<id>)
   │     └── 入力受信 (WebSocket JSON)
   └── CDP エンドポイント (--remote-debugging-port=9222)
 
 tailscale serve --bg 3000
   → https://<hostname>.ts.net/ で HTTPS 公開
 
-スマホ: https://<hostname>.ts.net → PWA (タッチ操作)
+スマホ: https://<hostname>.ts.net → PWA (タブ切り替え + タッチ操作)
 AI:    agent-browser --cdp 9222 (localhost)
 ```
 
 ## 機能
 
+- **マルチセッション (タブ)** — 複数の独立したブラウザセッションをタブ UI で切り替え
 - CEF OSR → JPEG → WebSocket バイナリフレーム (30 FPS)
 - ネイティブダイアログ完全抑制 (alert/confirm/prompt/file picker/WebAuthn)
 - WebAuthn パスキー自動キャンセル + パスワード認証フォールバック誘導
 - ブラウザツールバー (戻る/進む/リロード/URL バー)
+- ファイルダウンロード (`DOWNLOAD_DIR` に保存 + Viewer トースト通知)
 - CDP エンドポイント
 - マウス/キーボード/タッチ/スクロール入力中継
 - ピンチズーム + パン + ダブルタップズーム (スマホ操作支援)
@@ -56,19 +59,47 @@ cargo build
 `cargo build` 時に CEF ランタイムファイルが `target/debug/` に自動バンドルされる。
 rpath 設定済みのため `LD_LIBRARY_PATH` 不要。Xvfb / Tailscale も自動起動。
 
-### Docker
-
-```bash
-docker compose up -d
-docker compose ps   # ポート確認
-```
-
 ### 起動後の出力
 
 ```
 VIEWER_PORT=3000
 CDP_PORT=9222
 TAILSCALE_URL=https://<hostname>.ts.net/
+```
+
+## マルチセッション
+
+PWA Viewer のタブ UI と REST API で、複数の独立したブラウザセッションを管理できる。
+
+### タブ操作 (PWA Viewer)
+
+- **タブクリック** — セッション切り替え
+- **`+` ボタン** — 新規セッション (Google を開く)
+- **`×` ボタン** — セッション削除
+
+### REST API
+
+```bash
+# セッション一覧
+curl http://localhost:3000/api/sessions
+# → [{"id":"0","url":"https://www.google.com/","title":"Google"}]
+
+# 新規セッション作成
+curl -X POST http://localhost:3000/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://github.com"}'
+# → {"id":"1","url":"https://github.com","title":""}
+
+# セッション削除
+curl -X DELETE http://localhost:3000/api/sessions/1
+# → 204 No Content
+```
+
+### WebSocket
+
+```
+ws://localhost:3000/ws?session=0   # セッション 0 のフレーム/入力
+ws://localhost:3000/ws?session=1   # セッション 1 のフレーム/入力
 ```
 
 ## 環境変数
@@ -79,12 +110,13 @@ TAILSCALE_URL=https://<hostname>.ts.net/
 | `CDP_PORT` | `9222` | Chrome DevTools Protocol ポート |
 | `START_URL` | `https://www.google.com` | 初期 URL |
 | `PUBLIC_DIR` | `public` | 静的ファイルディレクトリ |
+| `DOWNLOAD_DIR` | `./downloads` | ダウンロードファイルの保存先 |
 | `NO_TAILSCALE` | - | 設定すると Tailscale 自動連携を無効化 |
 
 ## スマホからのアクセス
 
 1. `https://<hostname>.ts.net/` にアクセス
-2. ブラウザ画面がフルスクリーンで表示される
+2. タブバーでセッションを切り替え、`+` で新規タブ作成
 3. タッチ操作で直接ブラウザを操作
 4. ピンチで拡大、ダブルタップで 2x ズーム/リセット
 5. キーボードボタン (右下) でソフトキーボードを表示
@@ -112,23 +144,21 @@ agent-browser --cdp 9222 snapshot -i
 remote-browser/
 ├── README.md
 ├── CLAUDE.md             # AI 向けプロジェクトドキュメント
-├── docker-compose.yml
 └── cef-browser/
     ├── Cargo.toml
     ├── build.rs           # CEF ファイルバンドル + rpath 設定
-    ├── Dockerfile
     ├── src/
-    │   └── main.rs        # HTTP/WS サーバー + 入力ハンドリング
+    │   └── main.rs        # HTTP/WS サーバー + セッション管理 + 入力ハンドリング
     ├── public/
-    │   ├── index.html     # PWA ビューア
-    │   ├── app.js         # Canvas 描画 + タッチ/キーボード入力
+    │   ├── index.html     # PWA ビューア (タブ UI)
+    │   ├── app.js         # Canvas 描画 + タブ管理 + タッチ/キーボード入力
     │   ├── style.css
     │   ├── manifest.json  # PWA マニフェスト
     │   ├── sw.js          # Service Worker
     │   └── icon.svg
     └── wew/               # CEF Rust バインディング (mycrl/wew フォーク)
         ├── src/
-        └── cxx/           # C++ (subprocess, dialog handlers)
+        └── cxx/           # C++ (subprocess, dialog/download handlers)
 ```
 
 ## ライセンス

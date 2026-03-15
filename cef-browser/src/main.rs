@@ -1,18 +1,21 @@
+use std::collections::HashMap;
 use std::process::{Child, Command};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{
-        State,
+        Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
+    http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{delete, get},
 };
 use image::{ImageBuffer, Rgb, codecs::jpeg::JpegEncoder};
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 use wew::{
@@ -62,9 +65,12 @@ impl RuntimeHandler for RuntimeObserver {
 struct FrameHandler {
     frame_tx: broadcast::Sender<FrameData>,
     event_tx: broadcast::Sender<String>,
+    session_id: String,
     width: u32,
     height: u32,
     last_hash: std::sync::atomic::AtomicU64,
+    current_url: Arc<Mutex<String>>,
+    current_title: Arc<Mutex<String>>,
 }
 
 #[derive(Clone)]
@@ -92,13 +98,15 @@ impl WebViewHandler for FrameHandler {
 
     fn on_title_change(&self, title: &str) {
         eprintln!("[CEF] Title: {}", title);
-        let event = serde_json::json!({ "type": "title", "title": title });
+        *self.current_title.lock() = title.to_string();
+        let event = serde_json::json!({ "type": "title", "title": title, "sessionId": self.session_id });
         let _ = self.event_tx.send(event.to_string());
     }
 
     fn on_url_change(&self, url: &str) {
         eprintln!("[CEF] URL: {}", url);
-        let event = serde_json::json!({ "type": "url", "url": url });
+        *self.current_url.lock() = url.to_string();
+        let event = serde_json::json!({ "type": "url", "url": url, "sessionId": self.session_id });
         let _ = self.event_tx.send(event.to_string());
     }
 
@@ -291,32 +299,69 @@ struct TouchPoint {
     force: Option<f64>,
 }
 
-// --- Shared application state ---
+// --- Session & shared application state ---
 
-struct AppState {
+struct Session {
+    id: String,
     frame_tx: broadcast::Sender<FrameData>,
     event_tx: broadcast::Sender<String>,
     webview: Mutex<Option<wew::webview::WebView<WindowlessRenderWebView>>>,
+    current_url: Arc<Mutex<String>>,
+    current_title: Arc<Mutex<String>>,
+}
+
+// --- Session command channel (main thread handles CEF operations) ---
+
+enum SessionCmd {
+    Create {
+        url: String,
+        reply: tokio::sync::oneshot::Sender<SessionInfo>,
+    },
+    Delete {
+        id: String,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+}
+
+struct AppState {
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    cmd_tx: Mutex<std::sync::mpsc::Sender<SessionCmd>>,
+    cdp_port: u16,
 }
 
 // --- WebSocket handler ---
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+#[derive(Deserialize)]
+struct WsQuery {
+    session: Option<String>,
 }
 
-async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
-    let mut frame_rx = state.frame_tx.subscribe();
-    let mut event_rx = state.event_tx.subscribe();
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Query(query): Query<WsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws(socket, state, query.session))
+}
 
-    // Send metadata as first message so client knows dimensions
-    // Then send binary JPEG frames with a 8-byte header (width:u32 + height:u32)
+async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Option<String>) {
+    let session = {
+        let sessions = state.sessions.lock();
+        match &session_id {
+            Some(id) => sessions.get(id).cloned(),
+            None => sessions.values().next().cloned(),
+        }
+    };
+    let Some(session) = session else {
+        let _ = socket.send(Message::Text(r#"{"type":"error","message":"Session not found"}"#.into())).await;
+        return;
+    };
+
+    let mut frame_rx = session.frame_tx.subscribe();
+    let mut event_rx = session.event_tx.subscribe();
+
     loop {
         tokio::select! {
-            // Send frames as binary (header + JPEG)
             Ok(frame_data) = frame_rx.recv() => {
                 let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
                 buf.extend_from_slice(&frame_data.width.to_le_bytes());
@@ -326,17 +371,15 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     break;
                 }
             }
-            // Send events as text JSON
             Ok(event) = event_rx.recv() => {
                 if socket.send(Message::Text(event.into())).await.is_err() {
                     break;
                 }
             }
-            // Receive input from client
             Some(Ok(msg)) = socket.recv() => {
                 match msg {
                     Message::Text(text) => {
-                        handle_input(&state, &text);
+                        handle_input(&session, &text);
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -347,13 +390,13 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-fn handle_input(state: &AppState, text: &str) {
+fn handle_input(session: &Session, text: &str) {
     let Ok(input) = serde_json::from_str::<InputMessage>(text) else {
         eprintln!("[WS] Failed to parse input: {}", text);
         return;
     };
 
-    let webview_guard = state.webview.lock();
+    let webview_guard = session.webview.lock();
     let Some(webview) = webview_guard.as_ref() else {
         return;
     };
@@ -510,6 +553,127 @@ fn handle_input(state: &AppState, text: &str) {
             eprintln!("[WS] Sending webauthn_response to CEF: {}", msg);
             webview.send_message(&msg.to_string());
         }
+    }
+}
+
+// --- Session API ---
+
+#[derive(Serialize, Clone)]
+struct SessionInfo {
+    id: String,
+    url: String,
+    title: String,
+    #[serde(rename = "cdpTargetId", skip_serializing_if = "Option::is_none")]
+    cdp_target_id: Option<String>,
+    #[serde(rename = "cdpWsUrl", skip_serializing_if = "Option::is_none")]
+    cdp_ws_url: Option<String>,
+}
+
+/// Fetch CDP targets via raw HTTP to localhost (no external dependencies)
+fn fetch_cdp_targets_sync(port: u16) -> Vec<serde_json::Value> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let stream = match std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
+    let req = format!(
+        "GET /json HTTP/1.1\r\nHost: localhost:{}\r\nConnection: close\r\n\r\n",
+        port
+    );
+    let mut writer = stream.try_clone().unwrap();
+    if writer.write_all(req.as_bytes()).is_err() { return vec![]; }
+
+    let mut reader = BufReader::new(stream);
+    let mut content_length: usize = 0;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 { break; }
+        if line == "\r\n" { break; }
+        let lower = line.to_lowercase();
+        if let Some(val) = lower.strip_prefix("content-length:") {
+            content_length = val.trim().parse().unwrap_or(0);
+        }
+    }
+    if content_length == 0 { return vec![]; }
+    let mut body = vec![0u8; content_length];
+    if reader.read_exact(&mut body).is_err() { return vec![]; }
+    serde_json::from_slice(&body).unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct CreateSessionBody {
+    #[serde(default = "default_url")]
+    url: String,
+}
+
+fn default_url() -> String {
+    "https://www.google.com".to_string()
+}
+
+async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
+    let cdp_port = state.cdp_port;
+    let cdp_targets: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || {
+        fetch_cdp_targets_sync(cdp_port)
+    }).await.unwrap_or_default();
+
+    // Only page targets (exclude iframes)
+    let page_targets: Vec<&serde_json::Value> = cdp_targets.iter()
+        .filter(|t| t["type"].as_str() == Some("page"))
+        .collect();
+
+    let sessions = state.sessions.lock();
+    let mut used_targets: Vec<bool> = vec![false; page_targets.len()];
+    let mut list: Vec<SessionInfo> = sessions.values().map(|s| {
+        let url = s.current_url.lock().clone();
+        // Match by URL (first unused match)
+        let cdp_idx = page_targets.iter().enumerate()
+            .position(|(i, t)| !used_targets[i] && t["url"].as_str() == Some(&url));
+        if let Some(idx) = cdp_idx { used_targets[idx] = true; }
+        let cdp = cdp_idx.map(|i| &page_targets[i]);
+        SessionInfo {
+            id: s.id.clone(),
+            url,
+            title: s.current_title.lock().clone(),
+            cdp_target_id: cdp.and_then(|t| t["id"].as_str().map(String::from)),
+            cdp_ws_url: cdp.and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from)),
+        }
+    }).collect();
+    list.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(list)
+}
+
+async fn create_session_api(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<CreateSessionBody>>,
+) -> (StatusCode, Json<SessionInfo>) {
+    let url = body.map(|b| b.url.clone()).unwrap_or_else(default_url);
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    {
+        let tx = state.cmd_tx.lock().clone();
+        let _ = tx.send(SessionCmd::Create { url, reply: reply_tx });
+    }
+    match reply_rx.await {
+        Ok(info) => (StatusCode::CREATED, Json(info)),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(SessionInfo {
+            id: String::new(), url: String::new(), title: "Error".to_string(),
+            cdp_target_id: None, cdp_ws_url: None,
+        })),
+    }
+}
+
+async fn delete_session_api(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> StatusCode {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    {
+        let tx = state.cmd_tx.lock().clone();
+        let _ = tx.send(SessionCmd::Delete { id, reply: reply_tx });
+    }
+    match reply_rx.await {
+        Ok(true) => StatusCode::NO_CONTENT,
+        _ => StatusCode::NOT_FOUND,
     }
 }
 
@@ -673,10 +837,6 @@ fn main() {
     eprintln!("[CEF-Browser] Starting with URL: {}", url);
     eprintln!("[CEF-Browser] Viewport: {}x{}", width, height);
 
-    // Broadcast channels
-    let (frame_tx, _) = broadcast::channel::<FrameData>(2);
-    let (event_tx, _) = broadcast::channel::<String>(16);
-
     // Create CEF runtime with multi-threaded message loop
     let message_loop = MultiThreadMessageLoop::default();
     let builder = message_loop
@@ -698,18 +858,38 @@ fn main() {
     ctx_rx.recv().expect("CEF context init failed");
     eprintln!("[CEF-Browser] CEF context ready");
 
-    // Create windowless webview
-    let handler = FrameHandler {
-        frame_tx: frame_tx.clone(),
-        event_tx: event_tx.clone(),
-        width,
-        height,
-        last_hash: std::sync::atomic::AtomicU64::new(0),
-    };
+    // Session command channel — API handlers send, main thread processes
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<SessionCmd>();
+    let next_id = AtomicU32::new(0);
 
-    let webview = runtime
-        .create_webview(
-            &url,
+    // Shared state for HTTP server (created early so main thread can also use sessions)
+    let state = Arc::new(AppState {
+        sessions: Mutex::new(HashMap::new()),
+        cmd_tx: Mutex::new(cmd_tx),
+        cdp_port: cdp_port.unwrap_or(9222),
+    });
+
+    // Helper: create session on main thread (owns `runtime`)
+    let create_session_fn = |state: &Arc<AppState>, url: &str| -> Arc<Session> {
+        let id = next_id.fetch_add(1, Ordering::Relaxed).to_string();
+        let (frame_tx, _) = broadcast::channel(2);
+        let (event_tx, _) = broadcast::channel(16);
+        let current_url = Arc::new(Mutex::new(url.to_string()));
+        let current_title = Arc::new(Mutex::new(String::new()));
+
+        let handler = FrameHandler {
+            frame_tx: frame_tx.clone(),
+            event_tx: event_tx.clone(),
+            session_id: id.clone(),
+            width,
+            height,
+            last_hash: std::sync::atomic::AtomicU64::new(0),
+            current_url: current_url.clone(),
+            current_title: current_title.clone(),
+        };
+
+        let webview = runtime.create_webview(
+            url,
             WebViewAttributes {
                 width,
                 height,
@@ -719,56 +899,96 @@ fn main() {
                 ..Default::default()
             },
             handler,
-        )
-        .expect("Failed to create WebView");
+        ).expect("Failed to create WebView");
 
-    eprintln!("[CEF-Browser] WebView created, navigating to {}", url);
+        eprintln!("[CEF-Browser] Session {} created: {}", id, url);
 
-    // Shared state
-    let state = Arc::new(AppState {
-        frame_tx,
-        event_tx,
-        webview: Mutex::new(Some(webview)),
-    });
+        let session = Arc::new(Session {
+            id: id.clone(),
+            frame_tx,
+            event_tx,
+            webview: Mutex::new(Some(webview)),
+            current_url,
+            current_title,
+        });
+        state.sessions.lock().insert(id, session.clone());
+        session
+    };
 
-    // Start HTTP/WS server on tokio runtime
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(async {
-        let public_dir = resolve_public_dir();
+    // Create initial session on main thread
+    let initial = create_session_fn(&state, &url);
+    eprintln!("[CEF-Browser] Initial session {} ready", initial.id);
 
-        let app = Router::new()
-            .route("/ws", get(ws_handler))
-            .fallback_service(ServeDir::new(&public_dir))
-            .with_state(state);
+    // Start HTTP/WS server on separate thread
+    let state_for_server = state.clone();
+    let server_thread = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        rt.block_on(async {
+            let public_dir = resolve_public_dir();
 
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
-            .await
-            .expect("Failed to bind TCP listener");
+            let app = Router::new()
+                .route("/ws", get(ws_handler))
+                .route("/api/sessions", get(list_sessions).post(create_session_api))
+                .route("/api/sessions/{id}", delete(delete_session_api))
+                .fallback_service(ServeDir::new(&public_dir))
+                .with_state(state_for_server);
 
-        eprintln!("[CEF-Browser] HTTP/WS server listening on port {}", port);
-        eprintln!("VIEWER_PORT={}", port);
-        if let Some(cdp) = cdp_port {
-            eprintln!("CDP_PORT={}", cdp);
-        }
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+                .await
+                .expect("Failed to bind TCP listener");
 
-        // Setup Tailscale (best-effort)
-        let tailscale_enabled = setup_tailscale(port);
-
-        // Cleanup on shutdown
-        let shutdown = async move {
-            tokio::signal::ctrl_c().await.ok();
-            eprintln!("\n[CEF-Browser] Shutting down...");
-            if tailscale_enabled {
-                teardown_tailscale();
-                eprintln!("[setup] tailscale serve: disabled");
+            eprintln!("[CEF-Browser] HTTP/WS server listening on port {}", port);
+            eprintln!("VIEWER_PORT={}", port);
+            if let Some(cdp) = cdp_port {
+                eprintln!("CDP_PORT={}", cdp);
             }
-        };
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown)
-            .await
-            .expect("Server error");
+            let tailscale_enabled = setup_tailscale(port);
+
+            let shutdown = async move {
+                tokio::signal::ctrl_c().await.ok();
+                eprintln!("\n[CEF-Browser] Shutting down...");
+                if tailscale_enabled {
+                    teardown_tailscale();
+                    eprintln!("[setup] tailscale serve: disabled");
+                }
+            };
+
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .expect("Server error");
+        });
     });
+
+    // Main thread: process session commands (CEF operations must happen here)
+    while let Ok(cmd) = cmd_rx.recv() {
+        match cmd {
+            SessionCmd::Create { url, reply } => {
+                let session = create_session_fn(&state, &url);
+                let _ = reply.send(SessionInfo {
+                    id: session.id.clone(),
+                    url: session.current_url.lock().clone(),
+                    title: session.current_title.lock().clone(),
+                    cdp_target_id: None,
+                    cdp_ws_url: None,
+                });
+            }
+            SessionCmd::Delete { id, reply } => {
+                let removed = state.sessions.lock().remove(&id);
+                if let Some(session) = removed {
+                    let _ = session.event_tx.send(r#"{"type":"session_closed"}"#.to_string());
+                    session.webview.lock().take();
+                    eprintln!("[CEF-Browser] Session {} closed", id);
+                    let _ = reply.send(true);
+                } else {
+                    let _ = reply.send(false);
+                }
+            }
+        }
+    }
+
+    server_thread.join().ok();
 
     // Cleanup Xvfb
     if let Some(ref mut xvfb) = _xvfb {

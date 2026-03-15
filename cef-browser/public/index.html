@@ -13,6 +13,10 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="tab-bar">
+    <div id="tabs"></div>
+    <button id="tab-new" class="tab-btn" aria-label="New tab">+</button>
+  </div>
   <div id="toolbar">
     <button id="btn-back" class="tb-btn" aria-label="Back">&#x276E;</button>
     <button id="btn-forward" class="tb-btn" aria-label="Forward">&#x276F;</button>
@@ -21,7 +25,7 @@
       <input id="url-input" type="url" placeholder="URL" autocomplete="off" autocapitalize="off" spellcheck="false">
     </form>
   </div>
-  <canvas id="screen"></canvas>
+  <canvas id="screen" tabindex="0"></canvas>
   <div id="status">Connecting...</div>
   <div id="dialog-overlay"></div>
   <button id="kb-toggle" aria-label="Toggle keyboard">&#x2328;</button>
