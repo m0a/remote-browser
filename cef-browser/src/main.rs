@@ -377,18 +377,30 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
 
     loop {
         tokio::select! {
-            Ok(frame_data) = frame_rx.recv() => {
-                let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
-                buf.extend_from_slice(&frame_data.width.to_le_bytes());
-                buf.extend_from_slice(&frame_data.height.to_le_bytes());
-                buf.extend_from_slice(&frame_data.jpeg);
-                if socket.send(Message::Binary(buf.into())).await.is_err() {
-                    break;
+            result = frame_rx.recv() => {
+                match result {
+                    Ok(frame_data) => {
+                        let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
+                        buf.extend_from_slice(&frame_data.width.to_le_bytes());
+                        buf.extend_from_slice(&frame_data.height.to_le_bytes());
+                        buf.extend_from_slice(&frame_data.jpeg);
+                        if socket.send(Message::Binary(buf.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
                 }
             }
-            Ok(event) = event_rx.recv() => {
-                if socket.send(Message::Text(event.into())).await.is_err() {
-                    break;
+            result = event_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        if socket.send(Message::Text(event.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
                 }
             }
             Some(Ok(msg)) = socket.recv() => {
@@ -887,7 +899,7 @@ fn main() {
     // Helper: create session on main thread (owns `runtime`)
     let create_session_fn = |state: &Arc<AppState>, url: &str| -> Arc<Session> {
         let id = next_id.fetch_add(1, Ordering::Relaxed).to_string();
-        let (frame_tx, _) = broadcast::channel(2);
+        let (frame_tx, _) = broadcast::channel(8);
         let (event_tx, _) = broadcast::channel(16);
         let current_url = Arc::new(Mutex::new(url.to_string()));
         let current_title = Arc::new(Mutex::new(String::new()));
