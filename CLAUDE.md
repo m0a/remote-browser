@@ -114,7 +114,12 @@ remote-browser/
     ├── Cargo.lock
     ├── build.rs           # CEF ファイルバンドル + rpath 設定
     ├── src/
-    │   └── main.rs          # HTTP/WS サーバー + 入力ハンドリング
+    │   ├── main.rs          # エントリポイント + CEF 初期化 + セットアップ
+    │   ├── session.rs       # Session, AppState, SessionCmd 構造体
+    │   ├── handler.rs       # FrameHandler (CEF コールバック + JPEG エンコード)
+    │   ├── input.rs         # 入力メッセージ型 + handle_input
+    │   ├── api.rs           # REST API (sessions CRUD + CDP ターゲット)
+    │   └── ws.rs            # WebSocket ハンドラ
     ├── public/
     │   ├── index.html        # PWA ビューア
     │   ├── app.js            # Canvas 描画 + タッチ/キーボード入力
