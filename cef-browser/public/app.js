@@ -13,6 +13,7 @@
   var urlForm = document.getElementById("url-form");
 
   var dialogOverlay = document.getElementById("dialog-overlay");
+  var debugEl = document.getElementById("debug-info");
   var tabsEl = document.getElementById("tabs");
   var tabNewBtn = document.getElementById("tab-new");
   var sessions = [];
@@ -24,6 +25,7 @@
   var lastImage = null;
   var connected = false;
   var reconnectTimer = null;
+  var disconnectDisplayTimer = null;
   var dialogTimer = null;
   var cursorPos = null; // {cx, cy} in canvas pixel coords
 
@@ -186,6 +188,7 @@
 
     ws.onopen = function () {
       connected = true;
+      if (disconnectDisplayTimer) { clearTimeout(disconnectDisplayTimer); disconnectDisplayTimer = null; }
       setStatus("connected");
     };
 
@@ -211,6 +214,7 @@
 
       try {
         var msg = JSON.parse(e.data);
+        showDebug("ws: " + msg.type);
         if (msg.type === "js_dialog") {
           showDialogNotification(msg);
         } else if (msg.type === "file_dialog") {
@@ -243,7 +247,11 @@
 
     ws.onclose = function () {
       connected = false;
-      setStatus("disconnected");
+      // Delay showing disconnected status to avoid flashing on brief reconnects
+      if (disconnectDisplayTimer) clearTimeout(disconnectDisplayTimer);
+      disconnectDisplayTimer = setTimeout(function () {
+        if (!connected) setStatus("disconnected");
+      }, 1500);
       scheduleReconnect();
     };
 
@@ -251,7 +259,7 @@
       connected = false;
     };
 
-    setStatus("connecting");
+    // Don't show "connecting" status to avoid flashing on quick reconnects
   }
 
   function scheduleReconnect() {
@@ -305,6 +313,13 @@
 
   var touchState = null;
   var lastTapTime = 0;
+  var debugTimer = null;
+
+  function showDebug(text) {
+    debugEl.textContent = text;
+    if (debugTimer) clearTimeout(debugTimer);
+    debugTimer = setTimeout(function() { debugEl.textContent = ""; }, 3000);
+  }
   var lastTapX = 0;
   var lastTapY = 0;
 
@@ -329,6 +344,8 @@
       lastX: mid.x,
       lastY: mid.y,
       lastDist: dist,
+      initialDist: dist,
+      mode: null, // 'pinch' or 'scroll', decided after movement
     };
   }
 
@@ -365,19 +382,10 @@
           cdpCoords: coords,
           startTime: Date.now(),
           isPanning: false,
+          isScrolling: false,
           sentToRemote: false,
         };
-
-        if (!isZoomed()) {
-          // At 1x: immediately send touch to remote
-          touchState.sentToRemote = true;
-          send({
-            type: "input_touch",
-            eventType: "touchStart",
-            touchPoints: [{ x: coords.x, y: coords.y, id: 0, radiusX: 1, radiusY: 1, force: 1 }],
-          });
-        }
-        // When zoomed: wait to see if it's a tap or pan
+        showDebug("1f: start");
       }
     },
     { passive: false }
@@ -403,39 +411,58 @@
         var moveDy = mid.y - touchState.lastY;
         var dpr = window.devicePixelRatio || 1;
 
-        // Pinch zoom
-        if (touchState.lastDist > 0 && dist > 0) {
-          var zoomRatio = dist / touchState.lastDist;
-          var newScale = viewScale * zoomRatio;
-          if (Math.abs(newScale - viewScale) > 0.01) {
-            var rect = canvas.getBoundingClientRect();
-            var cx = (mid.x - rect.left) * dpr;
-            var cy = (mid.y - rect.top) * dpr;
-            zoomAtPoint(newScale, cx, cy);
+        // Determine gesture mode on first significant movement
+        if (touchState.mode === null) {
+          var distChange = Math.abs(dist - touchState.initialDist);
+          var posChange = Math.sqrt(moveDx * moveDx + moveDy * moveDy);
+          if (distChange > 20) {
+            touchState.mode = "pinch";
+            showDebug("2f: pinch");
+          } else if (posChange > 8) {
+            touchState.mode = "scroll";
+            showDebug("2f: scroll");
           }
+          // Not enough movement yet — skip
         }
 
-        // Pan (when zoomed) or scroll remote page (when at 1x)
-        if (isZoomed()) {
-          viewPanX += moveDx * dpr;
-          viewPanY += moveDy * dpr;
+        if (touchState.mode === "pinch") {
+          // Pinch zoom
+          if (touchState.lastDist > 0 && dist > 0) {
+            var zoomRatio = dist / touchState.lastDist;
+            var newScale = viewScale * zoomRatio;
+            if (Math.abs(newScale - viewScale) > 0.01) {
+              var rect = canvas.getBoundingClientRect();
+              var cx = (mid.x - rect.left) * dpr;
+              var cy = (mid.y - rect.top) * dpr;
+              zoomAtPoint(newScale, cx, cy);
+            }
+          }
+          if (isZoomed()) {
+            viewPanX += moveDx * dpr;
+            viewPanY += moveDy * dpr;
+          }
           if (lastImage) drawFrame(lastImage);
-        } else {
-          // Reset pan when back to 1x
-          viewPanX = 0;
-          viewPanY = 0;
-          if (lastImage) drawFrame(lastImage);
-          // Scroll the remote page
-          var scaleY = metadata ? metadata.deviceHeight / (frameRect.height / dpr) : 1;
-          var scaleX = metadata ? metadata.deviceWidth / (frameRect.width / dpr) : 1;
-          var midCoords = clientToCDP(mid.x, mid.y);
-          send({
-            type: "input_scroll",
-            x: midCoords ? midCoords.x : 0,
-            y: midCoords ? midCoords.y : 0,
-            deltaX: Math.round(moveDx * scaleX),
-            deltaY: Math.round(moveDy * scaleY),
-          });
+        } else if (touchState.mode === "scroll") {
+          if (isZoomed()) {
+            // Pan the local view
+            viewPanX += moveDx * dpr;
+            viewPanY += moveDy * dpr;
+            if (lastImage) drawFrame(lastImage);
+          } else {
+            // Scroll the remote page (negate: finger up = scroll down)
+            var scaleY = metadata ? metadata.deviceHeight / (frameRect.height / dpr) : 1;
+            var scaleX = metadata ? metadata.deviceWidth / (frameRect.width / dpr) : 1;
+            var midCoords = clientToCDP(mid.x, mid.y);
+            var scrollMsg = {
+              type: "input_scroll",
+              x: midCoords ? midCoords.x : 0,
+              y: midCoords ? midCoords.y : 0,
+              deltaX: Math.round(-moveDx * scaleX * 3),
+              deltaY: Math.round(-moveDy * scaleY * 3),
+            };
+            console.log("[scroll] dx=" + scrollMsg.deltaX + " dy=" + scrollMsg.deltaY);
+            send(scrollMsg);
+          }
         }
 
         touchState.lastX = mid.x;
@@ -444,13 +471,13 @@
 
       } else if (touchState.fingers === 1 && e.touches.length === 1) {
         var t = e.touches[0];
+        var moveDist = Math.sqrt(
+          Math.pow(t.clientX - touchState.startX, 2) +
+          Math.pow(t.clientY - touchState.startY, 2)
+        );
 
         if (isZoomed()) {
-          // When zoomed: check if this is a pan gesture
-          var moveDist = Math.sqrt(
-            Math.pow(t.clientX - touchState.startX, 2) +
-            Math.pow(t.clientY - touchState.startY, 2)
-          );
+          // When zoomed: pan the local view
           if (moveDist > 10 || touchState.isPanning) {
             touchState.isPanning = true;
             var dpr = window.devicePixelRatio || 1;
@@ -458,19 +485,36 @@
             viewPanY += (t.clientY - touchState.lastY) * dpr;
             if (lastImage) drawFrame(lastImage);
           }
-          touchState.lastX = t.clientX;
-          touchState.lastY = t.clientY;
         } else {
-          // At 1x: send drag to remote
-          var coords = clientToCDP(t.clientX, t.clientY);
-          if (coords) {
+          // At 1x: scroll if dragged, otherwise wait for tap
+          if (moveDist > 10 || touchState.isScrolling) {
+            if (!touchState.isScrolling) {
+              // Cancel any touch we sent to remote
+              if (touchState.sentToRemote) {
+                cancelOngoingTouch();
+                touchState.sentToRemote = false;
+              }
+              touchState.isScrolling = true;
+              showDebug("1f: scroll mode");
+            }
+            // Send scroll event
+            var dpr = window.devicePixelRatio || 1;
+            var scaleY = metadata ? metadata.deviceHeight / (frameRect.height / dpr) : 1;
+            var scaleX = metadata ? metadata.deviceWidth / (frameRect.width / dpr) : 1;
+            var dx = t.clientX - touchState.lastX;
+            var dy = t.clientY - touchState.lastY;
+            var scrollCoords = clientToCDP(t.clientX, t.clientY);
             send({
-              type: "input_touch",
-              eventType: "touchMove",
-              touchPoints: [{ x: coords.x, y: coords.y, id: 0, radiusX: 1, radiusY: 1, force: 1 }],
+              type: "input_scroll",
+              x: scrollCoords ? scrollCoords.x : 0,
+              y: scrollCoords ? scrollCoords.y : 0,
+              deltaX: Math.round(-dx * scaleX * 3),
+              deltaY: Math.round(-dy * scaleY * 3),
             });
           }
         }
+        touchState.lastX = t.clientX;
+        touchState.lastY = t.clientY;
       }
     },
     { passive: false }
@@ -485,28 +529,16 @@
       if (touchState.fingers === 1 && e.touches.length === 0) {
         var t = e.changedTouches[0];
 
-        if (isZoomed()) {
-          if (!touchState.isPanning) {
-            // It was a tap while zoomed → send click to remote
-            var coords = clientToCDP(t.clientX, t.clientY);
-            if (coords) {
-              send({
-                type: "input_touch",
-                eventType: "touchStart",
-                touchPoints: [{ x: coords.x, y: coords.y, id: 0, radiusX: 1, radiusY: 1, force: 1 }],
-              });
-              send({
-                type: "input_touch",
-                eventType: "touchEnd",
-                touchPoints: [{ x: coords.x, y: coords.y, id: 0, radiusX: 1, radiusY: 1, force: 1 }],
-              });
-            }
-          }
-          // else: was a pan gesture, no click
-        } else {
-          // At 1x: send touchEnd
+        if (!touchState.isPanning && !touchState.isScrolling) {
+          showDebug("1f: tap → click");
+          // It was a tap → send click to remote
           var coords = clientToCDP(t.clientX, t.clientY);
           if (coords) {
+            send({
+              type: "input_touch",
+              eventType: "touchStart",
+              touchPoints: [{ x: coords.x, y: coords.y, id: 0, radiusX: 1, radiusY: 1, force: 1 }],
+            });
             send({
               type: "input_touch",
               eventType: "touchEnd",
@@ -514,6 +546,7 @@
             });
           }
         }
+        // else: was a scroll/pan gesture, no click
 
         // Double-tap detection
         var now = Date.now();
@@ -521,7 +554,7 @@
           Math.pow(t.clientX - lastTapX, 2) +
           Math.pow(t.clientY - lastTapY, 2)
         );
-        if (!touchState.isPanning && now - lastTapTime < 300 && tapDist < 40) {
+        if (!touchState.isPanning && !touchState.isScrolling && now - lastTapTime < 300 && tapDist < 40) {
           // Double tap
           var dpr = window.devicePixelRatio || 1;
           var rect = canvas.getBoundingClientRect();

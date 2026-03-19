@@ -489,6 +489,7 @@ fn handle_input(session: &Session, text: &str) {
         InputMessage::Scroll {
             x, y, delta_x, delta_y,
         } => {
+            eprintln!("[WS] Scroll: x={} y={} dx={} dy={} → wheel({}, {})", x, y, delta_x, delta_y, -(delta_x as i32), -(delta_y as i32));
             webview.mouse(&MouseEvent::Move(Position { x, y }));
             webview.mouse(&MouseEvent::Wheel(Position {
                 x: -(delta_x as i32),
