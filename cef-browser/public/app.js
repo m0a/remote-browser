@@ -201,8 +201,8 @@
         var w = view.getUint32(0, true);
         var h = view.getUint32(4, true);
         metadata = { deviceWidth: w, deviceHeight: h };
-        var jpegBlob = new Blob([new Uint8Array(e.data, 8)], { type: "image/jpeg" });
-        var url = URL.createObjectURL(jpegBlob);
+        var imgBlob = new Blob([new Uint8Array(e.data, 8)], { type: "image/webp" });
+        var url = URL.createObjectURL(imgBlob);
         var img = new Image();
         img.onload = function () {
           drawFrame(img);
@@ -444,11 +444,12 @@
           if (lastImage) drawFrame(lastImage);
         } else if (touchState.mode === "scroll") {
           if (isZoomed()) {
-            // Pan the local view
+            // Pan local view + scroll remote page
             viewPanX += moveDx * dpr;
             viewPanY += moveDy * dpr;
             if (lastImage) drawFrame(lastImage);
-          } else {
+          }
+          {
             // Scroll the remote page (negate: finger up = scroll down)
             var scaleY = metadata ? metadata.deviceHeight / (frameRect.height / dpr) : 1;
             var scaleX = metadata ? metadata.deviceWidth / (frameRect.width / dpr) : 1;
@@ -477,13 +478,26 @@
         );
 
         if (isZoomed()) {
-          // When zoomed: pan the local view
+          // When zoomed: pan local view + scroll remote page
           if (moveDist > 10 || touchState.isPanning) {
             touchState.isPanning = true;
             var dpr = window.devicePixelRatio || 1;
-            viewPanX += (t.clientX - touchState.lastX) * dpr;
-            viewPanY += (t.clientY - touchState.lastY) * dpr;
+            var dx = t.clientX - touchState.lastX;
+            var dy = t.clientY - touchState.lastY;
+            viewPanX += dx * dpr;
+            viewPanY += dy * dpr;
             if (lastImage) drawFrame(lastImage);
+            // Also scroll the remote page
+            var scaleY = metadata ? metadata.deviceHeight / (frameRect.height / dpr) : 1;
+            var scaleX = metadata ? metadata.deviceWidth / (frameRect.width / dpr) : 1;
+            var scrollCoords = clientToCDP(t.clientX, t.clientY);
+            send({
+              type: "input_scroll",
+              x: scrollCoords ? scrollCoords.x : 0,
+              y: scrollCoords ? scrollCoords.y : 0,
+              deltaX: Math.round(-dx * scaleX * 3),
+              deltaY: Math.round(-dy * scaleY * 3),
+            });
           }
         } else {
           // At 1x: scroll if dragged, otherwise wait for tap
@@ -1050,6 +1064,9 @@
   function switchToSession(id) {
     activeSessionId = id;
     renderTabs();
+    // Update URL bar with session's current URL
+    var s = sessions.find(function(x) { return x.id === id; });
+    if (s && s.url) { urlInput.value = s.url; }
     // Reconnect WebSocket to the new session
     lastImage = null;
     ctx.fillStyle = "#000";

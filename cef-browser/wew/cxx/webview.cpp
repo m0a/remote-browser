@@ -49,12 +49,6 @@ void IWebViewLoad::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> 
 {
     _handler.on_state_change(WebViewState::WEW_LOADED, _handler.context);
     browser->GetHost()->SetFocus(true);
-
-    if (_handler.on_url_change && frame->IsMain())
-    {
-        std::string url = frame->GetURL().ToString();
-        _handler.on_url_change(url.c_str(), _handler.context);
-    }
 }
 
 void IWebViewLoad::OnLoadError(CefRefPtr<CefBrowser> browser,
@@ -136,6 +130,15 @@ void IWebViewDisplay::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefStri
     std::string value = title.ToString();
     _handler.on_title_change(value.c_str(), _handler.context);
 };
+
+void IWebViewDisplay::OnAddressChange(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString &url)
+{
+    if (frame->IsMain() && _handler.on_url_change)
+    {
+        std::string value = url.ToString();
+        _handler.on_url_change(value.c_str(), _handler.context);
+    }
+}
 
 void IWebViewDisplay::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen)
 {

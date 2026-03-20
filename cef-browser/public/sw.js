@@ -1,4 +1,4 @@
-const CACHE_NAME = "remote-browser-v8";
+const CACHE_NAME = "remote-browser-v11";
 const SHELL_FILES = [
   "/",
   "/index.html",

@@ -148,6 +148,11 @@ class IWebViewDisplay : public CefDisplayHandler
     void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
 
     ///
+    /// Called when the browser's address changes.
+    ///
+    void OnAddressChange(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString &url) override;
+
+    ///
     /// Called when web content in the page has toggled fullscreen mode.
     ///
     void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) override;

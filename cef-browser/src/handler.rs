@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use image::{ImageBuffer, Rgb, codecs::jpeg::JpegEncoder};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use wew::webview::{Frame, WebViewHandler, WebViewState, WindowlessRenderWebViewHandler};
 
 #[derive(Clone)]
 pub struct FrameData {
-    pub jpeg: Vec<u8>,
+    pub image: Vec<u8>,
     pub width: u32,
     pub height: u32,
 }
@@ -24,21 +23,19 @@ pub struct FrameHandler {
     pub last_frame: Arc<Mutex<Option<FrameData>>>,
 }
 
-fn bgra_to_jpeg(buffer: &[u8], width: u32, height: u32, quality: u8) -> Vec<u8> {
+fn bgra_to_webp(buffer: &[u8], width: u32, height: u32, quality: f32) -> Vec<u8> {
     let pixel_count = (width * height) as usize;
-    let mut rgb = Vec::with_capacity(pixel_count * 3);
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
     for chunk in buffer.chunks_exact(4) {
-        rgb.push(chunk[2]);
-        rgb.push(chunk[1]);
-        rgb.push(chunk[0]);
+        rgba.push(chunk[2]); // R
+        rgba.push(chunk[1]); // G
+        rgba.push(chunk[0]); // B
+        rgba.push(chunk[3]); // A
     }
 
-    let img: ImageBuffer<Rgb<u8>, _> =
-        ImageBuffer::from_raw(width, height, rgb).expect("invalid image dimensions");
-    let mut output = Vec::with_capacity(pixel_count / 4);
-    let encoder = JpegEncoder::new_with_quality(&mut output, quality);
-    img.write_with_encoder(encoder).expect("JPEG encode failed");
-    output
+    let encoder = webp::Encoder::from_rgba(&rgba, width, height);
+    let mem = encoder.encode(quality);
+    mem.to_vec()
 }
 
 fn simple_hash(data: &[u8]) -> u64 {
@@ -140,8 +137,8 @@ impl WindowlessRenderWebViewHandler for FrameHandler {
             eprintln!("[CEF] Frame #{}: {}x{} buffer={}bytes", count, frame.width, frame.height, frame.buffer.len());
         }
 
-        let jpeg = bgra_to_jpeg(frame.buffer, frame.width, frame.height, 60);
-        let data = FrameData { jpeg, width: self.width, height: self.height };
+        let image = bgra_to_webp(frame.buffer, frame.width, frame.height, 40.0);
+        let data = FrameData { image, width: self.width, height: self.height };
         *self.last_frame.lock() = Some(data.clone());
         let _ = self.frame_tx.send(data);
     }

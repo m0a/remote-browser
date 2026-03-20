@@ -40,10 +40,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
     {
         let cached = session.last_frame.lock().clone();
         if let Some(frame_data) = cached {
-            let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
+            let mut buf = Vec::with_capacity(8 + frame_data.image.len());
             buf.extend_from_slice(&frame_data.width.to_le_bytes());
             buf.extend_from_slice(&frame_data.height.to_le_bytes());
-            buf.extend_from_slice(&frame_data.jpeg);
+            buf.extend_from_slice(&frame_data.image);
             let _ = socket.send(Message::Binary(buf.into())).await;
         }
     }
@@ -56,10 +56,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
             result = frame_rx.recv() => {
                 match result {
                     Ok(frame_data) => {
-                        let mut buf = Vec::with_capacity(8 + frame_data.jpeg.len());
+                        let mut buf = Vec::with_capacity(8 + frame_data.image.len());
                         buf.extend_from_slice(&frame_data.width.to_le_bytes());
                         buf.extend_from_slice(&frame_data.height.to_le_bytes());
-                        buf.extend_from_slice(&frame_data.jpeg);
+                        buf.extend_from_slice(&frame_data.image);
                         if socket.send(Message::Binary(buf.into())).await.is_err() {
                             break;
                         }
