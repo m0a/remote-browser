@@ -336,6 +336,8 @@ typedef struct
     uint32_t height;
     uint32_t x;
     uint32_t y;
+    uint32_t dirty_width;
+    uint32_t dirty_height;
 } Frame;
 
 ///
@@ -374,6 +376,9 @@ typedef struct
     void (*on_file_dialog)(FileDialogMode mode, const char *title, const char *default_file_path, void *context);
     void (*on_download_started)(uint32_t id, const char *url, const char *filename, int64_t total_bytes, void *context);
     void (*on_download_updated)(uint32_t id, int64_t received_bytes, int64_t total_bytes, int percent_complete, bool is_complete, bool is_cancelled, void *context);
+    void (*on_audio_stream_started)(int sample_rate, int channels, void *context);
+    void (*on_audio_stream_packet)(const float *data, int frames, int channels, void *context);
+    void (*on_audio_stream_stopped)(void *context);
     void *context;
 } WebViewHandler;
 

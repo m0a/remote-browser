@@ -6,6 +6,7 @@
 //
 
 #include "webview.h"
+#include "include/cef_audio_handler.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -216,17 +217,36 @@ void IWebViewRender::OnPaint(CefRefPtr<CefBrowser> browser,
         return;
     }
 
-    Frame frame;
-    frame.width = width;
-    frame.height = height;
-    frame.buffer = buffer;
-    frame.is_popup = type == PaintElementType::PET_POPUP;
+    if (type == PaintElementType::PET_POPUP)
+    {
+        Frame frame;
+        frame.width = width;
+        frame.height = height;
+        frame.buffer = buffer;
+        frame.is_popup = true;
+        frame.x = _popup_rect.x;
+        frame.y = _popup_rect.y;
+        frame.dirty_width = width;
+        frame.dirty_height = height;
+        _handler.on_frame(&frame, _handler.context);
+        return;
+    }
 
-    auto rect = dirtyRects[0];
-    frame.x = frame.is_popup ? _popup_rect.x : rect.x;
-    frame.y = frame.is_popup ? _popup_rect.y : rect.y;
-
-    _handler.on_frame(&frame, _handler.context);
+    // Send each dirty rect as a separate frame update
+    for (size_t i = 0; i < dirtyRects.size(); i++)
+    {
+        auto &rect = dirtyRects[i];
+        Frame frame;
+        frame.width = width;
+        frame.height = height;
+        frame.buffer = buffer;
+        frame.is_popup = false;
+        frame.x = rect.x;
+        frame.y = rect.y;
+        frame.dirty_width = rect.width;
+        frame.dirty_height = rect.height;
+        _handler.on_frame(&frame, _handler.context);
+    }
 }
 
 void IWebViewRender::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect &rect)
@@ -404,6 +424,67 @@ void IWebViewDownload::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
     }
 }
 
+/* CefAudioHandler */
+
+IWebViewAudio::IWebViewAudio(WebViewHandler &handler) : _handler(handler) {}
+
+bool IWebViewAudio::GetAudioParameters(CefRefPtr<CefBrowser> browser,
+                                        CefAudioParameters &params)
+{
+    params.sample_rate = 48000;
+    params.channel_layout = CEF_CHANNEL_LAYOUT_STEREO;
+    params.frames_per_buffer = 480;
+    return true;
+}
+
+void IWebViewAudio::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser,
+                                           const CefAudioParameters &params,
+                                           int channels)
+{
+    _channels = channels;
+    if (_handler.on_audio_stream_started)
+    {
+        _handler.on_audio_stream_started(params.sample_rate, channels, _handler.context);
+    }
+}
+
+void IWebViewAudio::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser,
+                                          const float **data,
+                                          int frames,
+                                          int64_t pts)
+{
+    if (!_handler.on_audio_stream_packet || _channels <= 0)
+        return;
+
+    // Interleave per-channel data into a single array
+    int total_samples = frames * _channels;
+    std::vector<float> interleaved(total_samples);
+    for (int i = 0; i < frames; i++)
+    {
+        for (int ch = 0; ch < _channels; ch++)
+        {
+            interleaved[i * _channels + ch] = data[ch][i];
+        }
+    }
+
+    _handler.on_audio_stream_packet(interleaved.data(), frames, _channels, _handler.context);
+}
+
+void IWebViewAudio::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser)
+{
+    if (_handler.on_audio_stream_stopped)
+    {
+        _handler.on_audio_stream_stopped(_handler.context);
+    }
+}
+
+void IWebViewAudio::OnAudioStreamError(CefRefPtr<CefBrowser> browser,
+                                         const CefString &message)
+{
+    std::string msg = message.ToString();
+    fprintf(stderr, "[CEF] Audio stream error: %s\n", msg.c_str());
+}
+
 /* CefRequestHandler */
 
 IWebViewRequest::IWebViewRequest(const WebViewSettings *settings)
@@ -438,6 +519,7 @@ IWebView::IWebView(CefSettings &cef_settings, const WebViewSettings *settings, W
     _js_dialog_handler = new IWebViewJSDialog(_handler);
     _file_dialog_handler = new IWebViewFileDialog(_handler);
     _download_handler = new IWebViewDownload(_handler);
+    _audio_handler = new IWebViewAudio(_handler);
 
     if (cef_settings.windowless_rendering_enabled)
     {
@@ -523,6 +605,12 @@ CefRefPtr<CefDownloadHandler> IWebView::GetDownloadHandler()
     CHECK_REFCOUNTING(nullptr);
 
     return _download_handler;
+}
+
+CefRefPtr<CefAudioHandler> IWebView::GetAudioHandler()
+{
+    CHECK_REFCOUNTING(nullptr);
+    return _audio_handler;
 }
 
 bool IWebView::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
