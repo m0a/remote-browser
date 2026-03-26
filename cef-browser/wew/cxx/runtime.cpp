@@ -103,7 +103,6 @@ CefRefPtr<IWebView> IRuntime::CreateWebView(std::string url, const WebViewSettin
     broswer_settings.minimum_font_size = settings->minimum_font_size;
     broswer_settings.minimum_logical_font_size = settings->minimum_logical_font_size;
     broswer_settings.webgl = settings->webgl ? STATE_ENABLED : STATE_DISABLED;
-    broswer_settings.databases = settings->databases ? STATE_ENABLED : STATE_DISABLED;
     broswer_settings.local_storage = settings->local_storage ? STATE_ENABLED : STATE_DISABLED;
     broswer_settings.javascript = settings->javascript ? STATE_ENABLED : STATE_DISABLED;
     broswer_settings.javascript_access_clipboard = settings->javascript_access_clipboard ? STATE_ENABLED : STATE_DISABLED;
