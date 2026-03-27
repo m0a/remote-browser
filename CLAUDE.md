@@ -44,16 +44,22 @@ AI:    agent-browser --cdp 9222 (localhost)
 - 日本語ロケール (Accept-Language: ja)
 - ファイルダウンロード (`DOWNLOAD_DIR` に保存 + viewer トースト通知)
 
-## 起動 (開発)
+## 起動
 
 ```bash
 cd cef-browser
-cargo build
-./target/debug/cef-browser [URL]
+./target/release/cef-browser [URL]
 ```
 
-`cargo build` 時に CEF ランタイムファイルと public/ が `target/debug/` に自動バンドルされる。
-rpath 設定済みのため `LD_LIBRARY_PATH` 不要。Xvfb / Tailscale も自動起動。
+Xvfb / Tailscale は自動起動。rpath 設定済みのため `LD_LIBRARY_PATH` 不要。
+
+### ビルド (初回 / コード変更時のみ)
+
+```bash
+cargo build --release
+```
+
+`cargo build` 時に CEF ランタイムファイルと public/ が `target/release/` に自動バンドルされる。
 
 起動すると stderr に以下が出力される:
 ```
@@ -135,12 +141,15 @@ remote-browser/
 ## コマンドリファレンス
 
 ```bash
-# 起動 (開発)
-cd cef-browser && cargo build && ./target/debug/cef-browser [URL]
+# 起動
+cd cef-browser && ./target/release/cef-browser [URL]
+
+# ビルド (初回 / コード変更時のみ)
+cd cef-browser && cargo build --release
 
 # 環境変数で設定をオーバーライド
-PORT=8080 CDP_PORT=9333 START_URL=https://example.com ./target/debug/cef-browser
+PORT=8080 CDP_PORT=9333 START_URL=https://example.com ./target/release/cef-browser
 
 # Tailscale 無効化
-NO_TAILSCALE=1 ./target/debug/cef-browser
+NO_TAILSCALE=1 ./target/release/cef-browser
 ```

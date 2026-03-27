@@ -48,16 +48,22 @@ AI:    agent-browser --cdp 9222 (localhost)
 
 ## クイックスタート
 
-### ビルドと起動
+### 起動
 
 ```bash
 cd cef-browser
-cargo build
-./target/debug/cef-browser [URL]
+./target/release/cef-browser [URL]
 ```
 
-`cargo build` 時に CEF ランタイムファイルが `target/debug/` に自動バンドルされる。
-rpath 設定済みのため `LD_LIBRARY_PATH` 不要。Xvfb / Tailscale も自動起動。
+Xvfb / Tailscale は自動起動。rpath 設定済みのため `LD_LIBRARY_PATH` 不要。
+
+### ビルド (初回 / コード変更時のみ)
+
+```bash
+cargo build --release
+```
+
+CEF ランタイムファイルが `target/release/` に自動バンドルされる。
 
 ### 起動後の出力
 
