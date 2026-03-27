@@ -94,6 +94,12 @@ fn ensure_cef_flags() {
         "--disable-software-rasterizer",
         &format!("--remote-debugging-port={}", cdp_port),
         "--lang=ja",
+        "--renderer-process-limit=1",
+        "--js-flags=--max-old-space-size=128",
+        "--disable-background-networking",
+        "--disable-breakpad",
+        "--disable-component-update",
+        "--in-process-gpu",
     ];
 
     let user_args: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
