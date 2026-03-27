@@ -28,6 +28,8 @@
   var disconnectDisplayTimer = null;
   var dialogTimer = null;
   var cursorPos = null; // {cx, cy} in canvas pixel coords
+  var audioCtx = null;
+  var audioNextTime = 0;
 
   // --- Zoom/Pan State ---
   var viewScale = 1;   // 1 = fit-to-screen, up to 5x
@@ -117,6 +119,45 @@
     }
   }
 
+  // Draw only the dirty (changed) region onto the canvas
+  function drawDirtyRect(img, dx, dy, dw, dh) {
+    if (!lastImage || !metadata) return;
+
+    var cw = canvas.width;
+    var ch = canvas.height;
+    var iw = metadata.deviceWidth;
+    var ih = metadata.deviceHeight;
+
+    var baseScale = Math.min(cw / iw, ch / ih);
+    var effectiveScale = baseScale * viewScale;
+
+    // Frame position on canvas
+    var frameW = iw * effectiveScale;
+    var frameH = ih * effectiveScale;
+    var frameX = (cw - frameW) / 2 + viewPanX;
+    var frameY = (ch - frameH) / 2 + viewPanY;
+
+    // Clamp (same as drawFrame)
+    if (frameW > cw) { frameX = Math.min(0, Math.max(cw - frameW, frameX)); }
+    else { frameX = (cw - frameW) / 2; }
+    if (frameH > ch) { frameY = Math.min(0, Math.max(ch - frameH, frameY)); }
+    else { frameY = (ch - frameH) / 2; }
+
+    // Map dirty rect from device coords to canvas coords
+    var cx1 = frameX + dx * effectiveScale;
+    var cy1 = frameY + dy * effectiveScale;
+    var cw1 = dw * effectiveScale;
+    var ch1 = dh * effectiveScale;
+
+    // Draw the dirty image at the correct position
+    ctx.drawImage(img, cx1, cy1, cw1, ch1);
+
+    // Debug: draw white border around dirty rect
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx1, cy1, cw1, ch1);
+  }
+
   function zoomAtPoint(newScale, cx, cy) {
     newScale = Math.max(1, Math.min(5, newScale));
     if (!lastImage) { viewScale = newScale; return; }
@@ -196,19 +237,34 @@
 
     ws.onmessage = function (e) {
       if (e.data instanceof ArrayBuffer) {
-        // Binary frame: [width:u32le][height:u32le][jpeg...]
-        var view = new DataView(e.data);
-        var w = view.getUint32(0, true);
-        var h = view.getUint32(4, true);
-        metadata = { deviceWidth: w, deviceHeight: h };
-        var imgBlob = new Blob([new Uint8Array(e.data, 8)], { type: "image/webp" });
-        var url = URL.createObjectURL(imgBlob);
-        var img = new Image();
-        img.onload = function () {
-          drawFrame(img);
-          URL.revokeObjectURL(url);
-        };
-        img.src = url;
+        var firstByte = new Uint8Array(e.data, 0, 1)[0];
+
+        if (firstByte === 0x01) {
+          // Video frame: [0x01][w:u32][h:u32][dx:u32][dy:u32][dw:u32][dh:u32][webp...]
+          var view = new DataView(e.data, 1);
+          var w = view.getUint32(0, true);
+          var h = view.getUint32(4, true);
+          var dx = view.getUint32(8, true);
+          var dy = view.getUint32(12, true);
+          var dw = view.getUint32(16, true);
+          var dh = view.getUint32(20, true);
+          metadata = { deviceWidth: w, deviceHeight: h };
+          var isFull = (dx === 0 && dy === 0 && dw === w && dh === h);
+          var imgBlob = new Blob([new Uint8Array(e.data, 25)], { type: "image/webp" });
+          var blobUrl = URL.createObjectURL(imgBlob);
+          var img = new Image();
+          img.onload = function () {
+            if (isFull) {
+              drawFrame(img);
+            } else {
+              drawDirtyRect(img, dx, dy, dw, dh);
+            }
+            URL.revokeObjectURL(blobUrl);
+          };
+          img.src = blobUrl;
+        } else if (firstByte === 0x02) {
+          handleAudioPacket(e.data);
+        }
         return;
       }
 
@@ -237,6 +293,11 @@
           if (msg.isComplete || msg.isCancelled) {
             showDownloadCompleteNotification(msg);
           }
+        } else if (msg.type === "audio_started") {
+          showDebug("Audio: " + msg.sampleRate + "Hz " + msg.channels + "ch");
+        } else if (msg.type === "audio_stopped") {
+          audioNextTime = 0;
+          showDebug("Audio stopped");
         } else if (msg.type === "error") {
           setStatus("error", msg.message);
         }
@@ -363,6 +424,7 @@
     "touchstart",
     function (e) {
       e.preventDefault();
+      initAudio();
 
       if (e.touches.length >= 2) {
         // 2+ fingers: enter pinch/scroll/pan mode
@@ -622,6 +684,7 @@
   canvas.addEventListener("mousedown", function (e) {
     mouseDown = true;
     canvas.focus();
+    initAudio();
     var coords = clientToCDP(e.clientX, e.clientY);
     if (coords) {
       send({
@@ -1112,6 +1175,57 @@
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(function () {});
+  }
+
+  // --- Audio Playback ---
+
+  function initAudio() {
+    if (audioCtx) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioNextTime = 0;
+    } catch (e) {
+      console.error("Failed to create AudioContext:", e);
+    }
+  }
+
+  function handleAudioPacket(arrayBuf) {
+    if (!audioCtx) return;
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+
+    var view = new DataView(arrayBuf, 1);
+    var sampleRate = view.getUint32(0, true);
+    var channels = view.getUint32(4, true);
+    var frames = view.getUint32(8, true);
+
+    // Copy PCM data to aligned buffer (offset 13 is not 4-byte aligned)
+    var pcmBytes = new Uint8Array(arrayBuf, 13);
+    var alignedBuf = new ArrayBuffer(pcmBytes.length);
+    new Uint8Array(alignedBuf).set(pcmBytes);
+    var pcmData = new Float32Array(alignedBuf);
+
+    var audioBuffer = audioCtx.createBuffer(channels, frames, sampleRate);
+
+    // De-interleave into per-channel arrays
+    for (var ch = 0; ch < channels; ch++) {
+      var channelData = audioBuffer.getChannelData(ch);
+      for (var i = 0; i < frames; i++) {
+        channelData[i] = pcmData[i * channels + ch];
+      }
+    }
+
+    var source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+
+    var currentTime = audioCtx.currentTime;
+    if (audioNextTime < currentTime) {
+      audioNextTime = currentTime + 0.05;
+    }
+    source.start(audioNextTime);
+    audioNextTime += frames / sampleRate;
   }
 
   // --- Init ---

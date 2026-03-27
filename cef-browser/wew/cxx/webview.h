@@ -270,6 +270,34 @@ class IWebViewFileDialog : public CefDialogHandler
     IMPLEMENT_REFCOUNTING(IWebViewFileDialog);
 };
 
+class IWebViewAudio : public CefAudioHandler
+{
+  public:
+    IWebViewAudio(WebViewHandler &handler);
+
+    bool GetAudioParameters(CefRefPtr<CefBrowser> browser,
+                            CefAudioParameters &params) override;
+
+    void OnAudioStreamStarted(CefRefPtr<CefBrowser> browser,
+                              const CefAudioParameters &params,
+                              int channels) override;
+
+    void OnAudioStreamPacket(CefRefPtr<CefBrowser> browser,
+                             const float **data,
+                             int frames,
+                             int64_t pts) override;
+
+    void OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) override;
+
+    void OnAudioStreamError(CefRefPtr<CefBrowser> browser,
+                            const CefString &message) override;
+
+  private:
+    WebViewHandler &_handler;
+    int _channels = 0;
+    IMPLEMENT_REFCOUNTING(IWebViewAudio);
+};
+
 class IWebViewDownload : public CefDownloadHandler
 {
   public:
@@ -368,6 +396,8 @@ class IWebView : public CefClient
 
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override;
 
+    CefRefPtr<CefAudioHandler> GetAudioHandler() override;
+
     ///
     /// Called when a new message is received from a different process.
     ///
@@ -408,6 +438,7 @@ class IWebView : public CefClient
     CefRefPtr<IWebViewJSDialog> _js_dialog_handler = nullptr;
     CefRefPtr<IWebViewFileDialog> _file_dialog_handler = nullptr;
     CefRefPtr<IWebViewDownload> _download_handler = nullptr;
+    CefRefPtr<IWebViewAudio> _audio_handler = nullptr;
 
     std::optional<CefRefPtr<CefBrowser>> _browser = std::nullopt;
     WebViewHandler _handler;

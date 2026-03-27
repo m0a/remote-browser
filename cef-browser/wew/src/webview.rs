@@ -150,16 +150,20 @@ pub enum FrameType {
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
     pub ty: FrameType,
-    /// The buffer of the frame
+    /// The full buffer of the frame (width * height * 4 bytes BGRA)
     pub buffer: &'a [u8],
-    /// The x coordinate of the frame
+    /// The x coordinate of the dirty region
     pub x: u32,
-    /// The y coordinate of the frame
+    /// The y coordinate of the dirty region
     pub y: u32,
-    /// The width of the frame
+    /// The full width of the frame buffer
     pub width: u32,
-    /// The height of the frame
+    /// The full height of the frame buffer
     pub height: u32,
+    /// The width of the dirty region
+    pub dirty_width: u32,
+    /// The height of the dirty region
+    pub dirty_height: u32,
 }
 
 impl std::fmt::Debug for Frame<'_> {
@@ -248,6 +252,15 @@ pub trait WebViewHandler: Send + Sync {
 
     /// Called when a download is updated (progress, complete, or cancelled).
     fn on_download_updated(&self, id: u32, received_bytes: i64, total_bytes: i64, percent_complete: i32, is_complete: bool, is_cancelled: bool) {}
+
+    /// Called when an audio stream starts.
+    fn on_audio_stream_started(&self, sample_rate: i32, channels: i32) {}
+
+    /// Called when an audio stream packet is received (interleaved float PCM).
+    fn on_audio_stream_packet(&self, data: &[f32], frames: i32, channels: i32) {}
+
+    /// Called when an audio stream stops.
+    fn on_audio_stream_stopped(&self) {}
 }
 
 /// Windowless render web view handler
@@ -613,6 +626,9 @@ impl IWebView {
                     on_file_dialog: Some(on_file_dialog_callback),
                     on_download_started: Some(on_download_started_callback),
                     on_download_updated: Some(on_download_updated_callback),
+                    on_audio_stream_started: Some(on_audio_stream_started_callback),
+                    on_audio_stream_packet: Some(on_audio_stream_packet_callback),
+                    on_audio_stream_stopped: Some(on_audio_stream_stopped_callback),
                     context: context as _,
                 },
             )
@@ -1002,6 +1018,8 @@ extern "C" fn on_frame_callback(frame: *const sys::Frame, context: *mut c_void) 
         y: raw_frame.y,
         width: raw_frame.width,
         height: raw_frame.height,
+        dirty_width: raw_frame.dirty_width,
+        dirty_height: raw_frame.dirty_height,
         buffer: unsafe {
             std::slice::from_raw_parts(
                 raw_frame.buffer as *const u8,
@@ -1201,6 +1219,44 @@ extern "C" fn on_download_updated_callback(
         MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => {
             handler.on_download_updated(id, received_bytes, total_bytes, percent_complete as i32, is_complete, is_cancelled)
         }
+    }
+}
+
+extern "C" fn on_audio_stream_started_callback(
+    sample_rate: c_int,
+    channels: c_int,
+    context: *mut c_void,
+) {
+    if context.is_null() { return; }
+    let context = unsafe { &*(context as *mut WebViewContext) };
+    match &context.handler {
+        MixWebviewHnadler::WebViewHandler(handler) => handler.on_audio_stream_started(sample_rate, channels),
+        MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => handler.on_audio_stream_started(sample_rate, channels),
+    }
+}
+
+extern "C" fn on_audio_stream_packet_callback(
+    data: *const f32,
+    frames: c_int,
+    channels: c_int,
+    context: *mut c_void,
+) {
+    if context.is_null() || data.is_null() { return; }
+    let context = unsafe { &*(context as *mut WebViewContext) };
+    let total = (frames * channels) as usize;
+    let slice = unsafe { std::slice::from_raw_parts(data, total) };
+    match &context.handler {
+        MixWebviewHnadler::WebViewHandler(handler) => handler.on_audio_stream_packet(slice, frames, channels),
+        MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => handler.on_audio_stream_packet(slice, frames, channels),
+    }
+}
+
+extern "C" fn on_audio_stream_stopped_callback(context: *mut c_void) {
+    if context.is_null() { return; }
+    let context = unsafe { &*(context as *mut WebViewContext) };
+    match &context.handler {
+        MixWebviewHnadler::WebViewHandler(handler) => handler.on_audio_stream_stopped(),
+        MixWebviewHnadler::WindowlessRenderWebViewHandler(handler) => handler.on_audio_stream_stopped(),
     }
 }
 

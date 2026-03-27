@@ -6,12 +6,13 @@ use tokio::sync::broadcast;
 use wew::WindowlessRenderWebView;
 
 use crate::api::SessionInfo;
-use crate::handler::FrameData;
+use crate::handler::{AudioData, FrameData};
 
 pub struct Session {
     pub id: String,
     pub frame_tx: broadcast::Sender<FrameData>,
     pub event_tx: broadcast::Sender<String>,
+    pub audio_tx: broadcast::Sender<AudioData>,
     pub webview: Mutex<Option<wew::webview::WebView<WindowlessRenderWebView>>>,
     pub current_url: Arc<Mutex<String>>,
     pub current_title: Arc<Mutex<String>>,

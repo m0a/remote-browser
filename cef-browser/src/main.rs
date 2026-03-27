@@ -94,6 +94,12 @@ fn ensure_cef_flags() {
         "--disable-software-rasterizer",
         &format!("--remote-debugging-port={}", cdp_port),
         "--lang=ja",
+        "--renderer-process-limit=1",
+        "--js-flags=--max-old-space-size=128",
+        "--disable-background-networking",
+        "--disable-breakpad",
+        "--disable-component-update",
+        "--in-process-gpu",
     ];
 
     let user_args: Vec<&str> = args[1..].iter().map(|s| s.as_str()).collect();
@@ -197,6 +203,7 @@ fn main() {
         let id = next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let (frame_tx, _) = broadcast::channel(8);
         let (event_tx, _) = broadcast::channel(16);
+        let (audio_tx, _) = broadcast::channel(32);
         let current_url = Arc::new(Mutex::new(url.to_string()));
         let current_title = Arc::new(Mutex::new(String::new()));
         let last_frame = Arc::new(Mutex::new(None));
@@ -204,9 +211,8 @@ fn main() {
         let handler = FrameHandler {
             frame_tx: frame_tx.clone(),
             event_tx: event_tx.clone(),
+            audio_tx: audio_tx.clone(),
             session_id: id.clone(),
-            width, height,
-            last_hash: std::sync::atomic::AtomicU64::new(0),
             current_url: current_url.clone(),
             current_title: current_title.clone(),
             last_frame: last_frame.clone(),
@@ -228,7 +234,7 @@ fn main() {
 
         let session = Arc::new(Session {
             id: id.clone(),
-            frame_tx, event_tx,
+            frame_tx, event_tx, audio_tx,
             webview: Mutex::new(Some(webview)),
             current_url, current_title, last_frame,
         });

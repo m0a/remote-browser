@@ -39,7 +39,7 @@ fn exec(command: &str, work_dir: &str) -> Result<String> {
 
 fn get_binary_name() -> String {
     format!(
-        "cef_binary_137.0.17+gf354b0e+chromium-137.0.7151.104_{}{}_minimal",
+        "cef_binary_146.0.6+g68649e2+chromium-146.0.7680.154_{}{}_minimal",
         if cfg!(target_os = "macos") {
             "macos"
         } else if cfg!(target_os = "windows") {

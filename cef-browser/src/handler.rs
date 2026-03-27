@@ -7,46 +7,55 @@ use wew::webview::{Frame, WebViewHandler, WebViewState, WindowlessRenderWebViewH
 #[derive(Clone)]
 pub struct FrameData {
     pub image: Vec<u8>,
+    /// Full frame dimensions
     pub width: u32,
     pub height: u32,
+    /// Dirty region (the part that changed)
+    pub dirty_x: u32,
+    pub dirty_y: u32,
+    pub dirty_width: u32,
+    pub dirty_height: u32,
+}
+
+#[derive(Clone)]
+pub struct AudioData {
+    pub sample_rate: i32,
+    pub channels: i32,
+    pub frames: i32,
+    pub pcm: Vec<f32>,  // interleaved float32
 }
 
 pub struct FrameHandler {
     pub frame_tx: broadcast::Sender<FrameData>,
     pub event_tx: broadcast::Sender<String>,
+    pub audio_tx: broadcast::Sender<AudioData>,
     pub session_id: String,
-    pub width: u32,
-    pub height: u32,
-    pub last_hash: std::sync::atomic::AtomicU64,
     pub current_url: Arc<Mutex<String>>,
     pub current_title: Arc<Mutex<String>>,
     pub last_frame: Arc<Mutex<Option<FrameData>>>,
 }
 
-fn bgra_to_webp(buffer: &[u8], width: u32, height: u32, quality: f32) -> Vec<u8> {
-    let pixel_count = (width * height) as usize;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
-    for chunk in buffer.chunks_exact(4) {
-        rgba.push(chunk[2]); // R
-        rgba.push(chunk[1]); // G
-        rgba.push(chunk[0]); // B
-        rgba.push(chunk[3]); // A
+/// Encode a dirty rect region from a full BGRA buffer to WebP
+fn bgra_dirty_to_webp(
+    buffer: &[u8], buf_width: u32,
+    x: u32, y: u32, w: u32, h: u32,
+    quality: f32,
+) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for row in y..(y + h) {
+        let row_start = (row * buf_width + x) as usize * 4;
+        for col in 0..w as usize {
+            let i = row_start + col * 4;
+            rgba.push(buffer[i + 2]); // R
+            rgba.push(buffer[i + 1]); // G
+            rgba.push(buffer[i]);     // B
+            rgba.push(buffer[i + 3]); // A
+        }
     }
-
-    let encoder = webp::Encoder::from_rgba(&rgba, width, height);
-    let mem = encoder.encode(quality);
-    mem.to_vec()
+    let encoder = webp::Encoder::from_rgba(&rgba, w, h);
+    encoder.encode(quality).to_vec()
 }
 
-fn simple_hash(data: &[u8]) -> u64 {
-    let step = if data.len() > 1024 { data.len() / 1024 } else { 1 };
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for i in (0..data.len()).step_by(step) {
-        hash ^= data[i] as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
 
 impl WebViewHandler for FrameHandler {
     fn on_state_change(&self, state: WebViewState) {
@@ -109,6 +118,29 @@ impl WebViewHandler for FrameHandler {
         let _ = self.event_tx.send(event.to_string());
     }
 
+    fn on_audio_stream_started(&self, sample_rate: i32, channels: i32) {
+        eprintln!("[CEF] Audio stream started: {}Hz {}ch", sample_rate, channels);
+        let event = serde_json::json!({
+            "type": "audio_started", "sampleRate": sample_rate, "channels": channels,
+        });
+        let _ = self.event_tx.send(event.to_string());
+    }
+
+    fn on_audio_stream_packet(&self, data: &[f32], frames: i32, channels: i32) {
+        let _ = self.audio_tx.send(AudioData {
+            sample_rate: 48000,
+            channels,
+            frames,
+            pcm: data.to_vec(),
+        });
+    }
+
+    fn on_audio_stream_stopped(&self) {
+        eprintln!("[CEF] Audio stream stopped");
+        let event = serde_json::json!({ "type": "audio_stopped" });
+        let _ = self.event_tx.send(event.to_string());
+    }
+
     fn on_file_dialog(&self, mode: u32, title: &str, default_file_path: &str) {
         let mode_name = match mode {
             0 => "open", 1 => "open_multiple", 2 => "open_folder", 3 => "save", _ => "unknown",
@@ -123,23 +155,48 @@ impl WebViewHandler for FrameHandler {
 
 impl WindowlessRenderWebViewHandler for FrameHandler {
     fn on_frame(&self, frame: &Frame) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
-        let count = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+        let dw = frame.dirty_width;
+        let dh = frame.dirty_height;
+        if dw == 0 || dh == 0 { return; }
 
-        let hash = simple_hash(frame.buffer);
-        let prev = self.last_hash.swap(hash, Ordering::Relaxed);
-        if prev == hash && count > 0 {
-            return;
+        let is_full = frame.x == 0 && frame.y == 0
+            && dw == frame.width && dh == frame.height;
+
+        let image = bgra_dirty_to_webp(
+            frame.buffer, frame.width,
+            frame.x, frame.y, dw, dh, 40.0,
+        );
+
+        let data = FrameData {
+            image,
+            width: frame.width,
+            height: frame.height,
+            dirty_x: frame.x,
+            dirty_y: frame.y,
+            dirty_width: dw,
+            dirty_height: dh,
+        };
+
+        // Cache full-frame renders for new WS connections
+        if is_full {
+            *self.last_frame.lock() = Some(data.clone());
+        } else {
+            // For partial updates, also update the cache with a full render
+            // (only if no cached frame exists yet)
+            if self.last_frame.lock().is_none() {
+                let full_image = bgra_dirty_to_webp(
+                    frame.buffer, frame.width,
+                    0, 0, frame.width, frame.height, 40.0,
+                );
+                *self.last_frame.lock() = Some(FrameData {
+                    image: full_image,
+                    width: frame.width, height: frame.height,
+                    dirty_x: 0, dirty_y: 0,
+                    dirty_width: frame.width, dirty_height: frame.height,
+                });
+            }
         }
 
-        if count % 30 == 0 {
-            eprintln!("[CEF] Frame #{}: {}x{} buffer={}bytes", count, frame.width, frame.height, frame.buffer.len());
-        }
-
-        let image = bgra_to_webp(frame.buffer, frame.width, frame.height, 40.0);
-        let data = FrameData { image, width: self.width, height: self.height };
-        *self.last_frame.lock() = Some(data.clone());
         let _ = self.frame_tx.send(data);
     }
 }

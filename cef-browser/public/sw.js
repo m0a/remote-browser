@@ -1,4 +1,4 @@
-const CACHE_NAME = "remote-browser-v11";
+const CACHE_NAME = "remote-browser-v12";
 const SHELL_FILES = [
   "/",
   "/index.html",
@@ -6,6 +6,8 @@ const SHELL_FILES = [
   "/style.css",
   "/manifest.json",
   "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
 ];
 
 self.addEventListener("install", (e) => {

@@ -7,12 +7,41 @@ use axum::{
 use serde::Deserialize;
 use tokio::sync::broadcast;
 
+use crate::handler::{AudioData, FrameData};
 use crate::input::handle_input;
 use crate::session::AppState;
 
 #[derive(Deserialize)]
 pub struct WsQuery {
     session: Option<String>,
+}
+
+/// Encode a FrameData into a binary message with 24-byte header:
+/// [width:u32le][height:u32le][dirty_x:u32le][dirty_y:u32le][dirty_w:u32le][dirty_h:u32le][webp...]
+fn frame_to_message(f: &FrameData) -> Message {
+    let mut buf = Vec::with_capacity(1 + 24 + f.image.len());
+    buf.push(0x01u8);  // type tag: video
+    buf.extend_from_slice(&f.width.to_le_bytes());
+    buf.extend_from_slice(&f.height.to_le_bytes());
+    buf.extend_from_slice(&f.dirty_x.to_le_bytes());
+    buf.extend_from_slice(&f.dirty_y.to_le_bytes());
+    buf.extend_from_slice(&f.dirty_width.to_le_bytes());
+    buf.extend_from_slice(&f.dirty_height.to_le_bytes());
+    buf.extend_from_slice(&f.image);
+    Message::Binary(buf.into())
+}
+
+fn audio_to_message(a: &AudioData) -> Message {
+    let pcm_bytes = a.pcm.len() * 4;
+    let mut buf = Vec::with_capacity(1 + 12 + pcm_bytes);
+    buf.push(0x02u8);  // type tag: audio
+    buf.extend_from_slice(&(a.sample_rate as u32).to_le_bytes());
+    buf.extend_from_slice(&(a.channels as u32).to_le_bytes());
+    buf.extend_from_slice(&(a.frames as u32).to_le_bytes());
+    for sample in &a.pcm {
+        buf.extend_from_slice(&sample.to_le_bytes());
+    }
+    Message::Binary(buf.into())
 }
 
 pub async fn ws_handler(
@@ -40,27 +69,20 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
     {
         let cached = session.last_frame.lock().clone();
         if let Some(frame_data) = cached {
-            let mut buf = Vec::with_capacity(8 + frame_data.image.len());
-            buf.extend_from_slice(&frame_data.width.to_le_bytes());
-            buf.extend_from_slice(&frame_data.height.to_le_bytes());
-            buf.extend_from_slice(&frame_data.image);
-            let _ = socket.send(Message::Binary(buf.into())).await;
+            let _ = socket.send(frame_to_message(&frame_data)).await;
         }
     }
 
     let mut frame_rx = session.frame_tx.subscribe();
     let mut event_rx = session.event_tx.subscribe();
+    let mut audio_rx = session.audio_tx.subscribe();
 
     loop {
         tokio::select! {
             result = frame_rx.recv() => {
                 match result {
                     Ok(frame_data) => {
-                        let mut buf = Vec::with_capacity(8 + frame_data.image.len());
-                        buf.extend_from_slice(&frame_data.width.to_le_bytes());
-                        buf.extend_from_slice(&frame_data.height.to_le_bytes());
-                        buf.extend_from_slice(&frame_data.image);
-                        if socket.send(Message::Binary(buf.into())).await.is_err() {
+                        if socket.send(frame_to_message(&frame_data)).await.is_err() {
                             break;
                         }
                     }
@@ -72,6 +94,17 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>, session_id: Opti
                 match result {
                     Ok(event) => {
                         if socket.send(Message::Text(event.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            result = audio_rx.recv() => {
+                match result {
+                    Ok(audio_data) => {
+                        if socket.send(audio_to_message(&audio_data)).await.is_err() {
                             break;
                         }
                     }
